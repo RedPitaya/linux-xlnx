@@ -98,7 +98,7 @@ extern unsigned int _irq_of_parse_and_map(struct device_node *, int);
 static void xilinx_intc_of_cleanup(void);
 static u32 irq;
 static struct device_node *node_bck = NULL;
-static struct intc *intc = NULL;
+static struct xintc_irq_chip *intc = NULL;
 
 static void intc_enable_or_unmask(struct irq_data *d)
 {
@@ -337,7 +337,7 @@ static int xilinx_intc_of_init(struct device_node *intc,
 #endif
 {
 	int ret;
-	struct xintc_irq_chip *irqc;
+	// struct xintc_irq_chip *irqc;
 	struct irq_chip *intc_dev;
 	u32 cpu_id = 0;
 
@@ -394,8 +394,7 @@ static int xilinx_intc_of_init(struct device_node *intc,
 		ret = -ENOMEM;
 		goto error;
 	}
-	intc = intc_dev;
-
+	
 	intc_dev->name = intc->full_name;
 	intc_dev->irq_unmask = intc_enable_or_unmask,
 	intc_dev->irq_mask = intc_disable_or_mask,
