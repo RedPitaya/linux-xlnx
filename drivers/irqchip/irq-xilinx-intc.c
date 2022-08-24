@@ -544,3 +544,5 @@ IRQCHIP_PLATFORM_DRIVER_END(xilinx_intc_opb)
 IRQCHIP_DECLARE(xilinx_intc_xps, "xlnx,xps-intc-1.00.a", xilinx_intc_of_init);
 IRQCHIP_DECLARE(xilinx_intc_opb, "xlnx,opb-intc-1.00.c", xilinx_intc_of_init);
 #endif
+
+EXPORT_SYMBOL_GPL(xilinx_intc_of_init);

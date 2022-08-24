@@ -30,14 +30,8 @@
  * Added by DM
 **/
 extern int xilinx_intc_of_init_done;
+extern int xilinx_intc_of_init(struct device_node *intc,struct device_node *parent);
 
-#ifndef CONFIG_IRQCHIP_XILINX_INTC_MODULE_SUPPORT_EXPERIMENTAL
-extern int __init xilinx_intc_of_init(struct device_node *intc,
-					     struct device_node *parent);
-#else
-extern int xilinx_intc_of_init(struct device_node *intc,
-			       struct device_node *parent);
-#endif
 
 unsigned int _irq_of_parse_and_map(struct device_node *dev, int index)
 {
