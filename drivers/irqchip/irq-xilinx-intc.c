@@ -554,3 +554,4 @@ int xilinx_intc_of_initEx(struct device_node *intc,struct device_node *parent)
 	return xilinx_intc_of_init(intc,parent);
 }
 
+EXPORT_SYMBOL_GPL(xilinx_intc_of_initEx);
