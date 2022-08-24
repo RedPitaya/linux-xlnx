@@ -545,8 +545,12 @@ IRQCHIP_DECLARE(xilinx_intc_xps, "xlnx,xps-intc-1.00.a", xilinx_intc_of_init);
 IRQCHIP_DECLARE(xilinx_intc_opb, "xlnx,opb-intc-1.00.c", xilinx_intc_of_init);
 #endif
 
-static int xilinx_intc_of_initEx(struct device_node *intc,struct device_node *parent){
+#ifndef CONFIG_IRQCHIP_XILINX_INTC_MODULE_SUPPORT_EXPERIMENTAL
+int __init xilinx_intc_of_initEx(struct device_node *intc,struct device_node *parent)
+#else
+int xilinx_intc_of_initEx(struct device_node *intc,struct device_node *parent)
+#endif
+{
 	return xilinx_intc_of_init(intc,parent);
 }
 
-EXPORT_SYMBOL_GPL(xilinx_intc_of_initEx);
