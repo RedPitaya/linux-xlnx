@@ -96,7 +96,7 @@ EXPORT_SYMBOL_GPL(xilinx_intc_of_init_done);
 extern unsigned int _irq_of_parse_and_map(struct device_node *, int);
 static void xilinx_intc_of_cleanup(void);
 static u32 irq;
-static struct xintc_irq_chip *intc = NULL;
+static struct device_node *node_bck = NULL;
 
 
 static void intc_enable_or_unmask(struct irq_data *d)
@@ -412,9 +412,9 @@ static int xilinx_intc_of_init(struct device_node *intc,
 	if (parent) {
 		// irq = irq_of_parse_and_map(intc, 0);
 		if (!xilinx_intc_of_init_done) { /** Added by DM **/
-	  		irq = _irq_of_parse_and_map(node, 0);
+	  		irq = _irq_of_parse_and_map(intc, 0);
 		} else {
-	  		irq = irq_of_parse_and_map(node, 0);
+	  		irq = irq_of_parse_and_map(intc, 0);
 		}
 #ifdef CONFIG_IRQCHIP_XILINX_INTC_MODULE_SUPPORT_EXPERIMENTAL
 		irqc->irq = irq;
@@ -431,7 +431,7 @@ static int xilinx_intc_of_init(struct device_node *intc,
 		}
 		xil_intc_initial_setup(irqc);
 		/** Added by DM **/
-		node_bck = node;
+		node_bck = intc;
 		xilinx_intc_of_init_done = 1;
 		return 0;
 	}
