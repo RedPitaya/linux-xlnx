@@ -1,0 +1,45 @@
+LED configuration for Ethernet phys
+
+Property names:
+	led-const-on: conditions the LED should be constant on
+	led-pules: condition the LED should be pulsed on
+	led-blink-slow: condition the LED should slowly blink
+	led-blink-fast: condition the LED should fast blink
+
+property values:
+	PHY_LED_OFF:		LED is off
+	PHY_LED_LINK10:		link is 10MBit/s
+	PHY_LED_LINK100:	link is 100MBit/s
+	PHY_LED_LINK1000:	link is 1000MBit/s
+	PHY_LED_PDOWN:		link is powered down
+	PHY_LED_EEE:		link is in EEE mode
+	PHY_LED_ANEG:		auto negotiation is running
+	PHY_LED_ABIST:		analog self testing is running
+	PHY_LED_CDIAG:		cable diagnostics is running
+	PHY_LED_COPPER:		copper interface detected
+	PHY_LED_FIBER:		fiber interface detected
+	PHY_LED_TXACT:		Transmit activity
+	PHY_LED_RXACT:		Receive activity
+	PHY_LED_COL:		Collision
+
+Example:
+
+#include <dt-bindings/phy/phy-leds.h>
+phy@0 {
+	compatible = "ethernet-phy-ieee802.3-c22";
+	reg = <0x0>;
+	#address-cells = <1>;
+	#size-cells = <0>;
+	led@0 {
+		compatible = "phy,led";
+		reg = <0>;
+		led-const-on = <(PHY_LED_LINK10 | PHY_LED_LINK100 | PHY_LED_LINK1000)>;
+		led-pules = <(PHY_LED_TXACT | PHY_LED_RXACT)>;
+	};
+	led@2 {
+		compatible = "phy,led";
+		reg = <2>;
+		led-blink-slow = <PHY_LED_EEE>;
+		led-blink-fast = <PHY_LED_PDOWN>;
+	};
+};

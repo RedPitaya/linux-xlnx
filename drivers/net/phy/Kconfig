@@ -355,6 +355,12 @@ config XILINX_GMII2RGMII
 	  the Reduced Gigabit Media Independent Interface(RGMII) between
 	  Ethernet physical media devices and the Gigabit Ethernet controller.
 
+config LANTIQ_PHY
+	tristate "Driver for Lantiq PHYs"
+	---help---
+	  Supports the Lantiq / Intel CHD 11G and 22E PHYs.
+	  These PHYs are also named PEF 7061, PEF 7071 and PEF 7072
+	  
 endif # PHYLIB
 
 config MICREL_KS8995MA

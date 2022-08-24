@@ -7,6 +7,7 @@
  * This file is subject to the terms and conditions of the GNU General Public
  * License. See the file "COPYING" in the main directory of this archive
  * for more details.
+ *  
  */
 
 #include <linux/irqdomain.h>
@@ -89,6 +90,15 @@ static void send_ipi(unsigned int cpu, unsigned int ipi_number)
 }
 #endif
 
+/** Added by DM **/
+int xilinx_intc_of_init_done = 0;
+EXPORT_SYMBOL_GPL(xilinx_intc_of_init_done);
+extern unsigned int _irq_of_parse_and_map(struct device_node *, int);
+static void xilinx_intc_of_cleanup(void);
+static u32 irq;
+static struct xintc_irq_chip *intc = NULL;
+
+
 static void intc_enable_or_unmask(struct irq_data *d)
 {
 	unsigned long mask = 1 << d->hwirq;
@@ -104,6 +114,14 @@ static void intc_enable_or_unmask(struct irq_data *d)
 		xintc_write(local_intc, IAR, mask);
 
 	xintc_write(local_intc, SIE, mask);
+
+		
+	/** Added by DM to enable all IRQs **/
+	xintc_write(local_intc,IAR,0xffffffff);	
+	xintc_write(local_intc,MER,MER_HIE | MER_ME);
+	
+	//local_intc->write_fn(MER_HIE | MER_ME, local_intc->baseaddr + MER);
+	//local_intc->write_fn(0xffffffff, local_intc->baseaddr + IAR); /* Acknowledge any pending interrupts just in case. */
 }
 
 static void intc_disable_or_mask(struct irq_data *d)
@@ -112,6 +130,11 @@ static void intc_disable_or_mask(struct irq_data *d)
 
 	pr_debug("irq-xilinx: disable: %ld\n", d->hwirq);
 	xintc_write(local_intc, CIE, 1 << d->hwirq);
+
+    /** Added by DM **/
+	if (d->hwirq == 0  &&  intc) {
+	    xilinx_intc_of_cleanup();
+	}
 }
 
 static void intc_ack(struct irq_data *d)
@@ -215,16 +238,37 @@ static void xil_intc_initial_setup(struct xintc_irq_chip *irqc)
 	}
 }
 
+static unsigned int get_irq(struct xintc_irq_chip *local_intc)
+{
+	int hwirq, irq = -1;
+
+	hwirq = xintc_read(local_intc,IVR);
+	if (hwirq != -1)
+		irq = irq_find_mapping(local_intc->domain, hwirq);
+
+	/** Just in case by DM, because HW can generate randomly wrong interrupts ? **/
+	if (unlikely((!irq || irq == -1) && hwirq != -1)) {
+		ack_bad_irq(irq);
+		irq = -1;
+	}
+	
+	pr_debug("get_irq: hwirq=%d, irq=%d\n", hwirq, irq);
+
+	return irq;
+}
+
 static void xil_intc_irq_handler(struct irq_desc *desc)
 {
 	struct irq_chip *chip = irq_desc_get_chip(desc);
 	struct xintc_irq_chip *irqc =
 		irq_data_get_irq_handler_data(&desc->irq_data);
 
+	pr_debug("xil_intc_irq_handler: input irq = %d\n", ((struct irq_desc *)desc)->irq_data.irq);
+
 	chained_irq_enter(chip, desc);
 
 	do {
-		u32 hwirq = xintc_read(irqc, IVR);
+		u32 hwirq = get_irq(irqc);
 
 		if (hwirq == -1U)
 			break;
@@ -366,7 +410,12 @@ static int xilinx_intc_of_init(struct device_node *intc,
 	}
 
 	if (parent) {
-		irq = irq_of_parse_and_map(intc, 0);
+		// irq = irq_of_parse_and_map(intc, 0);
+		if (!xilinx_intc_of_init_done) { /** Added by DM **/
+	  		irq = _irq_of_parse_and_map(node, 0);
+		} else {
+	  		irq = irq_of_parse_and_map(node, 0);
+		}
 #ifdef CONFIG_IRQCHIP_XILINX_INTC_MODULE_SUPPORT_EXPERIMENTAL
 		irqc->irq = irq;
 		intc->data = irqc;
@@ -381,6 +430,9 @@ static int xilinx_intc_of_init(struct device_node *intc,
 			goto err_alloc;
 		}
 		xil_intc_initial_setup(irqc);
+		/** Added by DM **/
+		node_bck = node;
+		xilinx_intc_of_init_done = 1;
 		return 0;
 	}
 
@@ -408,6 +460,22 @@ error:
 	if (parent)
 		kfree(irqc);
 	return ret;
+}
+
+static void xilinx_intc_of_cleanup(void) {
+  
+	pr_debug("xilinx_intc_of_cleanup\n");
+	
+	disable_irq(irq);
+	irq_domain_remove(intc->domain);
+	iounmap(intc->base);
+	kfree(intc);
+	intc = NULL;
+		
+	xilinx_intc_of_init(node_bck, NULL);
+	xilinx_intc_of_init_done = 0;
+	    
+	return;
 }
 
 #ifdef CONFIG_IRQCHIP_XILINX_INTC_MODULE_SUPPORT_EXPERIMENTAL
