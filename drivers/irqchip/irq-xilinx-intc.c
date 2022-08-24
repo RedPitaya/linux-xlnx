@@ -133,7 +133,7 @@ static void intc_disable_or_mask(struct irq_data *d)
 	xintc_write(local_intc, CIE, 1 << d->hwirq);
 
     /** Added by DM **/
-	if (d->hwirq == 0  &&  intc) {
+	if (d->hwirq == 0  &&  irqc) {
 	    xilinx_intc_of_cleanup();
 	}
 }
