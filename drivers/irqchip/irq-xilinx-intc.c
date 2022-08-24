@@ -125,7 +125,12 @@ static void intc_enable_or_unmask(struct irq_data *d)
 	//local_intc->write_fn(0xffffffff, local_intc->baseaddr + IAR); /* Acknowledge any pending interrupts just in case. */
 }
 
+#ifndef CONFIG_IRQCHIP_XILINX_INTC_MODULE_SUPPORT_EXPERIMENTAL
+static void __init intc_disable_or_mask(struct irq_data *d)						 
+#else
 static void intc_disable_or_mask(struct irq_data *d)
+#endif
+
 {
 	struct xintc_irq_chip *local_intc = irq_data_get_irq_chip_data(d);
 
