@@ -98,7 +98,7 @@ extern unsigned int _irq_of_parse_and_map(struct device_node *, int);
 static void xilinx_intc_of_cleanup(void);
 static u32 irq;
 static struct device_node *node_bck = NULL;
-static struct xintc_irq_chip *intc = NULL;
+static struct xintc_irq_chip *irqc = NULL;
 
 static void intc_enable_or_unmask(struct irq_data *d)
 {
@@ -468,10 +468,10 @@ static void xilinx_intc_of_cleanup(void) {
 	pr_debug("xilinx_intc_of_cleanup\n");
 	
 	disable_irq(irq);
-	irq_domain_remove(intc->domain);
-	iounmap(intc->base);
-	kfree(intc);
-	intc = NULL;
+	irq_domain_remove(irqc->domain);
+	iounmap(irqc->base);
+	kfree(irqc);
+	irqc = NULL;
 		
 	xilinx_intc_of_init(node_bck, NULL);
 	xilinx_intc_of_init_done = 0;
