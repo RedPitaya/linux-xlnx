@@ -21,6 +21,7 @@
 #include <linux/of_irq.h>
 #include <linux/cpuhotplug.h>
 #include <linux/smp.h>
+#include <linux/interrupt.h>
 
 /* No one else should require these constants, so define them locally here. */
 #define ISR 0x00			/* Interrupt Status Register */
@@ -97,7 +98,7 @@ extern unsigned int _irq_of_parse_and_map(struct device_node *, int);
 static void xilinx_intc_of_cleanup(void);
 static u32 irq;
 static struct device_node *node_bck = NULL;
-
+static struct intc *intc = NULL;
 
 static void intc_enable_or_unmask(struct irq_data *d)
 {
@@ -335,7 +336,7 @@ static int xilinx_intc_of_init(struct device_node *intc,
 			       struct device_node *parent)
 #endif
 {
-	int ret, irq;
+	int ret;
 	struct xintc_irq_chip *irqc;
 	struct irq_chip *intc_dev;
 	u32 cpu_id = 0;
@@ -393,6 +394,7 @@ static int xilinx_intc_of_init(struct device_node *intc,
 		ret = -ENOMEM;
 		goto error;
 	}
+	intc = intc_dev;
 
 	intc_dev->name = intc->full_name;
 	intc_dev->irq_unmask = intc_enable_or_unmask,
