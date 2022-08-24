@@ -30,7 +30,7 @@
  * Added by DM
 **/
 extern int xilinx_intc_of_init_done;
-extern int xilinx_intc_of_init(struct device_node *intc,struct device_node *parent);
+extern int xilinx_intc_of_initEx(struct device_node *intc,struct device_node *parent);
 
 
 unsigned int _irq_of_parse_and_map(struct device_node *dev, int index)
@@ -60,7 +60,7 @@ unsigned int irq_of_parse_and_map(struct device_node *dev, int index)
 	    NOTE: DTS(O) node must be mapped under "ampa_pl" and named "interrupt-controller@81800000" **/
 	if (!strcmp(dev->full_name, "/amba_pl/interrupt-controller@81800000\0")) {
 	    if (!xilinx_intc_of_init_done) {
-			xilinx_intc_of_init(dev, NULL);
+			xilinx_intc_of_initEx(dev, NULL);
 	    }
 	}
 
