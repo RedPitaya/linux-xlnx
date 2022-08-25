@@ -65,6 +65,7 @@ static int fclk_probe(struct platform_device *pdev)
 {
 	struct fclk_state *st;
 	int ret;
+	u32 rate;
 	struct device *dev = &pdev->dev;
 
 	st = devm_kzalloc(&pdev->dev, sizeof(*st), GFP_KERNEL);
@@ -78,6 +79,19 @@ static int fclk_probe(struct platform_device *pdev)
 	if (IS_ERR(st->pl))
 		return PTR_ERR(st->pl);
 
+	ret = of_property_read_u32(pdev->dev.of_node, "rate", &rate);
+	if (ret) {
+		dev_err(&pdev->dev, "No clock rate in device tree.\n");
+		return ret;
+	}
+	rate = clk_round_rate(st->pl, rate);
+	ret = clk_set_rate(st->pl, rate);
+
+	if (ret) {
+		dev_err(&pdev->dev, "Unable to set rate of a clock.\n");
+		return ret;
+	}
+
 	ret = clk_prepare_enable(st->pl);
 	if (ret) {
 		dev_err(&pdev->dev, "Unable to enable clock.\n");
@@ -87,6 +101,8 @@ static int fclk_probe(struct platform_device *pdev)
 	ret = sysfs_create_group(&dev->kobj, &fclk_ctrl_attr_grp);
 	if (ret)
 		return ret;
+
+	dev_info(&pdev->dev, "Clock enabled and set to: %lu Hz.\n", rate);
 
 	return 0;
 }
