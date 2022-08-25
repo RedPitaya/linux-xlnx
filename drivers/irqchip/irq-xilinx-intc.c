@@ -20,6 +20,7 @@
 #include <linux/of_irq.h>
 #include <linux/cpuhotplug.h>
 #include <linux/smp.h>
+#include <linux/interrupt.h>
 
 /* No one else should require these constants, so define them locally here. */
 #define ISR 0x00			/* Interrupt Status Register */
@@ -89,6 +90,15 @@ static void send_ipi(unsigned int cpu, unsigned int ipi_number)
 }
 #endif
 
+/** Added by DM **/
+int xilinx_intc_of_init_done = 0;
+EXPORT_SYMBOL_GPL(xilinx_intc_of_init_done);
+extern unsigned int _irq_of_parse_and_map(struct device_node *, int);
+static void xilinx_intc_of_cleanup(void);
+static u32 irq;
+static struct device_node *node_bck = NULL;
+static struct xintc_irq_chip *irqc = NULL;
+
 static void intc_enable_or_unmask(struct irq_data *d)
 {
 	unsigned long mask = 1 << d->hwirq;
@@ -104,14 +114,32 @@ static void intc_enable_or_unmask(struct irq_data *d)
 		xintc_write(local_intc, IAR, mask);
 
 	xintc_write(local_intc, SIE, mask);
+
+		
+	/** Added by DM to enable all IRQs **/
+	xintc_write(local_intc,IAR,0xffffffff);	
+	xintc_write(local_intc,MER,MER_HIE | MER_ME);
+	
+	//local_intc->write_fn(MER_HIE | MER_ME, local_intc->baseaddr + MER);
+	//local_intc->write_fn(0xffffffff, local_intc->baseaddr + IAR); /* Acknowledge any pending interrupts just in case. */
 }
 
+#ifndef CONFIG_IRQCHIP_XILINX_INTC_MODULE_SUPPORT_EXPERIMENTAL
+static void __init intc_disable_or_mask(struct irq_data *d)						 
+#else
 static void intc_disable_or_mask(struct irq_data *d)
+#endif
+
 {
 	struct xintc_irq_chip *local_intc = irq_data_get_irq_chip_data(d);
 
 	pr_debug("irq-xilinx: disable: %ld\n", d->hwirq);
 	xintc_write(local_intc, CIE, 1 << d->hwirq);
+
+    /** Added by DM **/
+	if (d->hwirq == 0  &&  irqc) {
+	    xilinx_intc_of_cleanup();
+	}
 }
 
 static void intc_ack(struct irq_data *d)
@@ -215,11 +243,32 @@ static void xil_intc_initial_setup(struct xintc_irq_chip *irqc)
 	}
 }
 
+static unsigned int get_irq(struct xintc_irq_chip *local_intc)
+{
+	int hwirq, irq = -1;
+
+	hwirq = xintc_read(local_intc,IVR);
+	if (hwirq != -1)
+		irq = irq_find_mapping(local_intc->domain, hwirq);
+
+	/** Just in case by DM, because HW can generate randomly wrong interrupts ? **/
+	if (unlikely((!irq || irq == -1) && hwirq != -1)) {
+		ack_bad_irq(irq);
+		irq = -1;
+	}
+	
+	pr_debug("get_irq: hwirq=%d, irq=%d\n", hwirq, irq);
+
+	return irq;
+}
+
 static void xil_intc_irq_handler(struct irq_desc *desc)
 {
 	struct irq_chip *chip = irq_desc_get_chip(desc);
 	struct xintc_irq_chip *irqc =
 		irq_data_get_irq_handler_data(&desc->irq_data);
+
+	pr_debug("xil_intc_irq_handler: input irq = %d\n", ((struct irq_desc *)desc)->irq_data.irq);
 
 	chained_irq_enter(chip, desc);
 
@@ -291,8 +340,8 @@ static int xilinx_intc_of_init(struct device_node *intc,
 			       struct device_node *parent)
 #endif
 {
-	int ret, irq;
-	struct xintc_irq_chip *irqc;
+	int ret;
+	// struct xintc_irq_chip *irqc;
 	struct irq_chip *intc_dev;
 	u32 cpu_id = 0;
 
@@ -366,7 +415,12 @@ static int xilinx_intc_of_init(struct device_node *intc,
 	}
 
 	if (parent) {
-		irq = irq_of_parse_and_map(intc, 0);
+		// irq = irq_of_parse_and_map(intc, 0);
+		if (!xilinx_intc_of_init_done) { /** Added by DM **/
+	  		irq = _irq_of_parse_and_map(intc, 0);
+		} else {
+	  		irq = irq_of_parse_and_map(intc, 0);
+		}
 #ifdef CONFIG_IRQCHIP_XILINX_INTC_MODULE_SUPPORT_EXPERIMENTAL
 		irqc->irq = irq;
 		intc->data = irqc;
@@ -381,6 +435,9 @@ static int xilinx_intc_of_init(struct device_node *intc,
 			goto err_alloc;
 		}
 		xil_intc_initial_setup(irqc);
+		/** Added by DM **/
+		node_bck = intc;
+		xilinx_intc_of_init_done = 1;
 		return 0;
 	}
 
@@ -408,6 +465,22 @@ error:
 	if (parent)
 		kfree(irqc);
 	return ret;
+}
+
+static void xilinx_intc_of_cleanup(void) {
+  
+	pr_debug("xilinx_intc_of_cleanup\n");
+	
+	disable_irq(irq);
+	irq_domain_remove(irqc->domain);
+	iounmap(irqc->base);
+	kfree(irqc);
+	irqc = NULL;
+		
+	xilinx_intc_of_init(node_bck, NULL);
+	xilinx_intc_of_init_done = 0;
+	    
+	return;
 }
 
 #ifdef CONFIG_IRQCHIP_XILINX_INTC_MODULE_SUPPORT_EXPERIMENTAL
@@ -470,3 +543,14 @@ IRQCHIP_PLATFORM_DRIVER_END(xilinx_intc_opb)
 IRQCHIP_DECLARE(xilinx_intc_xps, "xlnx,xps-intc-1.00.a", xilinx_intc_of_init);
 IRQCHIP_DECLARE(xilinx_intc_opb, "xlnx,opb-intc-1.00.c", xilinx_intc_of_init);
 #endif
+
+#ifndef CONFIG_IRQCHIP_XILINX_INTC_MODULE_SUPPORT_EXPERIMENTAL
+int __init xilinx_intc_of_initEx(struct device_node *intc,struct device_node *parent)
+#else
+int xilinx_intc_of_initEx(struct device_node *intc,struct device_node *parent)
+#endif
+{
+	return xilinx_intc_of_init(intc,parent);
+}
+
+EXPORT_SYMBOL_GPL(xilinx_intc_of_initEx);

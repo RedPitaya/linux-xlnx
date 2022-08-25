@@ -25,6 +25,28 @@
 #include <linux/string.h>
 #include <linux/slab.h>
 
+
+/**
+ * Added by DM
+**/
+extern int xilinx_intc_of_init_done;
+#ifndef CONFIG_IRQCHIP_XILINX_INTC_MODULE_SUPPORT_EXPERIMENTAL
+extern int __init xilinx_intc_of_initEx(struct device_node *intc,struct device_node *parent);
+#else
+extern int xilinx_intc_of_initEx(struct device_node *intc,struct device_node *parent);
+#endif
+
+unsigned int _irq_of_parse_and_map(struct device_node *dev, int index)
+{
+	struct of_phandle_args oirq;
+	
+	if (of_irq_parse_one(dev, index, &oirq))
+		return 0;
+
+	return irq_create_of_mapping(&oirq);
+}
+EXPORT_SYMBOL_GPL(_irq_of_parse_and_map);
+
 /**
  * irq_of_parse_and_map - Parse and map an interrupt into linux virq space
  * @dev: Device node of the device whose interrupt is to be mapped
@@ -36,6 +58,14 @@
 unsigned int irq_of_parse_and_map(struct device_node *dev, int index)
 {
 	struct of_phandle_args oirq;
+
+	/** Added by DM 
+	    NOTE: DTS(O) node must be mapped under "ampa_pl" and named "interrupt-controller@81800000" **/
+	if (!strcmp(dev->full_name, "/amba_pl/interrupt-controller@81800000\0")) {
+	    if (!xilinx_intc_of_init_done) {
+			xilinx_intc_of_initEx(dev, NULL);
+	    }
+	}
 
 	if (of_irq_parse_one(dev, index, &oirq))
 		return 0;
