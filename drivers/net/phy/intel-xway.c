@@ -287,9 +287,10 @@ static int xway_gphy_config_init(struct phy_device *phydev)
 	phy_write_mmd(phydev, MDIO_MMD_VEND2, XWAY_MMD_LED2H, ledxh);
 	phy_write_mmd(phydev, MDIO_MMD_VEND2, XWAY_MMD_LED2L, ledxl);
 
-	err = xway_gphy_rgmii_init(phydev);
-	if (err)
-		return err;
+	// Disable init deleay via rgmii
+	// err = xway_gphy_rgmii_init(phydev);
+	// if (err)
+	// 	return err;
 
 	return 0;
 }
