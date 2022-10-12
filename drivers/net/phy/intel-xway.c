@@ -243,6 +243,17 @@ static int xway_gphy_config_init(struct phy_device *phydev)
 	/* Clear all pending interrupts */
 	phy_read(phydev, XWAY_MDIO_ISTAT);
 
+	/* Set MII power supply to 2V5. /
+	PATCH for RP boards
+	phy_write(phydev, MII_PHY_MIICTRL,
+		5 << MIICTRL_TXSKEW | 1 << MIICTRL_V25_33 |
+		4 << MIICTRL_RXSKEW | 1 << MIICTRL_RXCOFF);
+	*/
+
+    err = phy_write(phydev, XWAY_MDIO_MIICTRL, 0xDC00);
+    if (err)
+        return err;
+
 	/* Ensure that integrated led function is enabled for all leds */
 	err = phy_write(phydev, XWAY_MDIO_LED,
 			XWAY_MDIO_LED_LED0_EN |
