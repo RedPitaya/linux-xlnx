@@ -361,9 +361,10 @@ static int add_changeset_property(struct overlay_changeset *ovcs,
 						   new_prop);
 	}
 
-	if (!of_node_check_flag(target->np, OF_OVERLAY))
-		pr_err("WARNING: memory leak will occur if overlay removed, property: %pOF/%s\n",
-		       target->np, new_prop->name);
+	// Disabled warning that overlay is loaded
+	// if (!of_node_check_flag(target->np, OF_OVERLAY))
+	// 	pr_err("WARNING: memory leak will occur if overlay removed, property: %pOF/%s\n",
+	// 	       target->np, new_prop->name);
 
 	if (ret) {
 		kfree(new_prop->name);
