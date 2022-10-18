@@ -27,12 +27,13 @@
 #include <linux/slab.h>
 #include <linux/wait.h>
 #include <linux/dma/xilinx_dma.h>
-#include <linux/dma-mapping.h>
+#include <linux/dma-mapping.h>1
 #include <linux/interrupt.h>
 #include <linux/sched.h>
 #include <linux/semaphore.h>
 #include <linux/dma-direction.h>
 #include <linux/of_address.h>
+#include <linux/dma-map-ops.h>
 #include "rpdma.h"
 
 struct rprx_channel{
@@ -61,8 +62,8 @@ struct rprx_channel{
 	enum dma_data_direction direction;
 	wait_queue_head_t wq;
 	u64 *memory_size;
-	unsigned num_devices; 
-    unsigned int minor_num; 
+	unsigned num_devices;
+    unsigned int minor_num;
     unsigned int major_num;
 };
 
@@ -113,7 +114,7 @@ int rprx_read(struct file *filep, char *buff, size_t len, loff_t *off)
 }
 
 /*
- * function to start and stop dma transfers with added essential status reporting and setup of number and size of memory segments 
+ * function to start and stop dma transfers with added essential status reporting and setup of number and size of memory segments
  */
 static long rprx_ioctl(struct file *file, unsigned int cmd , unsigned long arg)
 {
@@ -122,10 +123,10 @@ static long rprx_ioctl(struct file *file, unsigned int cmd , unsigned long arg)
 	smp_rmb();
 	dev_info(dev, "ioctl cmd:%d arg%d\n",cmd,(int)arg);
 	switch (cmd){
-		
+
 	/*
 	 * stop aqusition to dma so that we can slowly fread all of date withouth a wory to loose some data
-	 * */	
+	 * */
 	case STOP_RX:{
 		dev_info(dev,"ioctl terminate all rx\n");
 		dmaengine_terminate_all(rx->chan);
@@ -133,7 +134,7 @@ static long rprx_ioctl(struct file *file, unsigned int cmd , unsigned long arg)
 		wake_up_interruptible(&rx->wq);
 		rx->dmastatus=STATUS_STOPPED;
 	}break;
-	
+
 	/*
 	 * start aqusition to dma memmory with automatic rewrite of old date when new data arives
 	 * */
@@ -188,14 +189,14 @@ static long rprx_ioctl(struct file *file, unsigned int cmd , unsigned long arg)
 	break;
 	}
 	/*
-	 * set number of segments used by this driver, combined size  of all segments can only be smaller then what device tree or defoults from header file 
+	 * set number of segments used by this driver, combined size  of all segments can only be smaller then what device tree or defoults from header file
 	 * */
 	case SET_RX_SGMNT_CNT:{
 		rx->segment_cnt=arg;
 		dev_info(dev, "ioctl segment cnt set to 0x%x \n",rx->segment_cnt);
 	}break;
 	/*
-	 *  set size of a segment used by this driver, combined size can only be smaller then what is in device tree or defoults from header file but not smaller than 4kB or larger then 4MB 
+	 *  set size of a segment used by this driver, combined size can only be smaller then what is in device tree or defoults from header file but not smaller than 4kB or larger then 4MB
 	 * */
 	case SET_RX_SGMNT_SIZE:{
 		rx->segment_size=arg;
@@ -233,7 +234,7 @@ static int rprx_mmap(struct file * f, struct vm_area_struct * v)
 	struct rprx_channel *rx = (struct rprx_channel *)f->private_data;
 	const struct device * dev =(const struct device *)&rx->rpdev->dev;
 	dev_info(dev, "mmap\n");
-	return dma_common_mmap(&rx->rpdev->dev, v, rx->addrv, rx->addrp,v->vm_end - v->vm_start);
+	return dma_common_mmap(&rx->rpdev->dev, v, rx->addrv, rx->addrp,v->vm_end - v->vm_start,0);
 }
 
 static struct file_operations fops = {
@@ -281,34 +282,34 @@ static int rprx_probe(struct platform_device *pd)
 	if (ret) {
 		dev_err(&rx->rpdev->dev, "No segment_size value in device tree. Setting to %d\n",RX_SGMNT_SIZE);
 		rx->segment_size=RX_SGMNT_SIZE;
-	} 
-	
+	}
+
 	ret = of_property_read_u32(rx->rpdev->dev.of_node, "segment_count", &rx->segment_cnt);
 	if (ret) {
 		dev_err(&rx->rpdev->dev, "No segment_count value in device tree. Setting to %d\n",RX_SGMNT_CNT);
 		rx->segment_cnt=RX_SGMNT_CNT;
-	} 
+	}
 	/*
 	 * create character device named by device tree node
 	 * */
 	if (alloc_chrdev_region(&rx->dev_num, rx->minor_num, rx->num_devices,  dev_name(dev)) < 0) {
 		return -1;
 	}
-	
+
    	rx->major_num = MAJOR(rx->dev_num);
-   	
+
 	if ((rx->cl = class_create(THIS_MODULE, dev_name(dev))) == NULL) {
 		unregister_chrdev_region(rx->dev_num, 1);
 		return -1;
 	}
-	
+
 	rx->dev_num=MKDEV(rx->major_num, rx->minor_num);
 	if (device_create(rx->cl, NULL,rx->dev_num, NULL,  dev_name(dev)) == NULL) {
 		class_destroy(rx->cl);
 		unregister_chrdev_region(rx->dev_num, rx->num_devices);
 		return -1;
 	}
-	
+
 	cdev_init(&rx->c_dev, &fops);
 
 	if (cdev_add(&rx->c_dev, rx->dev_num, rx->num_devices) == -1) {
@@ -335,7 +336,7 @@ static int rprx_probe(struct platform_device *pd)
 	}else {
 		dev_info(dev, "reserved dma: %p and 0x%x KiB @0x%x\n",(void*)rx->chan,((rx->segment_cnt)*(rx->segment_size))/1024,rx->addrp);
 	}
-	
+
 	/*
 	 * setup device in ready to aquire state
 	 * */
@@ -364,19 +365,19 @@ static int rprx_remove(struct platform_device *pdev)
 	if(rx->chan){
 		dma_release_channel(rx->chan);
 	}
-	
+
 	if(rx->cl&&rx->dev_num){
 		device_destroy(rx->cl,rx->dev_num);
 	}
 
 	if(rx->cl){
-		class_destroy(rx->cl);	
+		class_destroy(rx->cl);
 	}
 
 	if(rx){
 		unregister_chrdev_region(rx->dev_num,1);
 	}
-	
+
 	if(dev&&rx){
 		devm_kfree(dev,rx);
 	}
