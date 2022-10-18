@@ -357,3 +357,5 @@ CONFIG_RESET_CONTROLLER=y
 # axi interrupt controller
 CONFIG_XILINX_INTC=y
 CONFIG_XILINX_FCLK=y
+# for https://xilinx-wiki.atlassian.net/wiki/spaces/A/pages/18842115/Intc
+CONFIG_IRQCHIP_XILINX_INTC_MODULE_SUPPORT_EXPERIMENTAL=y
