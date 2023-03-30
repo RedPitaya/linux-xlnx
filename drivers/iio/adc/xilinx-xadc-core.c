@@ -1415,6 +1415,9 @@ static int xadc_probe(struct platform_device *pdev)
 		xadc_read_adc_reg(xadc, XADC_REG_THRESHOLD(i),
 			&xadc->threshold[i]);
 
+	 // Set average to 256
+	conf0 |= 0x3000;
+
 	ret = xadc_write_adc_reg(xadc, XADC_REG_CONF0, conf0);
 	if (ret)
 		return ret;
