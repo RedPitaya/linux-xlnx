@@ -18,8 +18,6 @@ num-cs = <1>;
 #address-cells = <1>;
 #size-cells = <0>;
 reset-gpios = <&gpio1 0xc GPIO_ACTIVE_HIGH>;
-reset-names = "qspi";
-resets = <&versal_reset VERSAL_RST_OSPI>;
 
 flash@0 {
 	compatible = "mt35xu02g", "micron,m25p80", "jedec,spi-nor";
@@ -34,6 +32,7 @@ flash@0 {
 	spi-tx-bus-width = <8>;
 	spi-rx-bus-width = <8>;
 	spi-max-frequency = <20000000>;
+	no-wp;
 	partition@0 {
 		label = "spi0-flash0";
 		reg = <0x0 0x8000000>;

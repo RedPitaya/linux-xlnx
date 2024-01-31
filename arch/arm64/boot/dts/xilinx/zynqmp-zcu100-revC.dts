@@ -49,7 +49,7 @@
 	gpio-keys {
 		compatible = "gpio-keys";
 		autorepeat;
-		sw4 {
+		switch-4 {
 			label = "sw4";
 			gpios = <&gpio 23 GPIO_ACTIVE_LOW>;
 			linux,code = <KEY_POWER>;
@@ -95,20 +95,11 @@
 			linux,default-trigger = "bluetooth-power";
 		};
 
-		vbus-det { /* U5 USB5744 VBUS detection via MIO25 */
+		led-vbus-det { /* U5 USB5744 VBUS detection via MIO25 */
 			label = "vbus_det";
 			gpios = <&gpio 25 GPIO_ACTIVE_HIGH>;
 			default-state = "on";
 		};
-	};
-
-	ltc2954: ltc2954 { /* U7 */
-		compatible = "lltc,ltc2954", "lltc,ltc2952";
-		status = "disabled";
-		trigger-gpios = <&gpio 26 GPIO_ACTIVE_LOW>; /* INT line - input */
-		/* If there is HW watchdog on mezzanine this signal should be connected there */
-		watchdog-gpios = <&gpio 35 GPIO_ACTIVE_HIGH>; /* MIO on PAD */
-		kill-gpios = <&gpio 34 GPIO_ACTIVE_LOW>; /* KILL signal - output */
 	};
 
 	wmmcsdio_fixed: fixedregulator-mmcsdio {
@@ -188,8 +179,8 @@
 	pinctrl-names = "default", "gpio";
 	pinctrl-0 = <&pinctrl_i2c1_default>;
 	pinctrl-1 = <&pinctrl_i2c1_gpio>;
-	scl-gpios = <&gpio 4 GPIO_ACTIVE_HIGH>;
-	sda-gpios = <&gpio 5 GPIO_ACTIVE_HIGH>;
+	scl-gpios = <&gpio 4 (GPIO_ACTIVE_HIGH | GPIO_OPEN_DRAIN)>;
+	sda-gpios = <&gpio 5 (GPIO_ACTIVE_HIGH | GPIO_OPEN_DRAIN)>;
 	clock-frequency = <100000>;
 	i2c-mux@75 { /* u11 */
 		compatible = "nxp,pca9548";
@@ -569,6 +560,7 @@
 	pinctrl-0 = <&pinctrl_usb0_default>;
 	phy-names = "usb3-phy";
 	phys = <&psgtr 2 PHY_TYPE_USB3 0 0>;
+	/delete-property/ reset-gpios;
 };
 
 &dwc3_0 {
@@ -584,6 +576,7 @@
 	pinctrl-0 = <&pinctrl_usb1_default>;
 	phy-names = "usb3-phy";
 	phys = <&psgtr 3 PHY_TYPE_USB3 1 0>;
+	reset-gpios = <&modepin_gpio 1 GPIO_ACTIVE_LOW>;
 };
 
 &dwc3_1 {
@@ -614,20 +607,3 @@
 	phys = <&psgtr 1 PHY_TYPE_DP 0 1>,
 	       <&psgtr 0 PHY_TYPE_DP 1 1>;
 };
-
-&zynqmp_dp_snd_pcm0 {
-	status = "okay";
-};
-
-&zynqmp_dp_snd_pcm1 {
-	status = "okay";
-};
-
-&zynqmp_dp_snd_card0 {
-	status = "okay";
-};
-
-&zynqmp_dp_snd_codec0 {
-	status = "okay";
-};
-

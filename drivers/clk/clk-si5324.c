@@ -461,7 +461,7 @@ static bool si5324_regmap_is_readable(struct device *dev, unsigned int reg)
 }
 
 /**
- * si5324_regmap_is_writable - Checks the register is writable or not
+ * si5324_regmap_is_writeable - Checks the register is writable or not
  *
  * @dev:	Registered device
  * @reg:	Register offset
@@ -1197,10 +1197,9 @@ err_clk:
 	return ret;
 }
 
-static int si5324_i2c_remove(struct i2c_client *client)
+static void si5324_i2c_remove(struct i2c_client *client)
 {
 	of_clk_del_provider(client->dev.of_node);
-	return 0;
 }
 
 static const struct i2c_device_id si5324_i2c_ids[] = {

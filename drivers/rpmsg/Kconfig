@@ -15,6 +15,14 @@ config RPMSG_CHAR
 	  in /dev. They make it possible for user-space programs to send and
 	  receive rpmsg packets.
 
+config RPMSG_CTRL
+	tristate "RPMSG control interface"
+	depends on RPMSG && ( RPMSG_CHAR || RPMSG_CHAR=n )
+	help
+	  Say Y here to enable the support of the /dev/rpmsg_ctrlX API. This API
+	  allows user-space programs to create endpoints with specific service name,
+	  source and destination addresses.
+
 config RPMSG_NS
 	tristate "RPMSG name service announcement"
 	depends on RPMSG
@@ -72,5 +80,17 @@ config RPMSG_VIRTIO
 	select RPMSG
 	select RPMSG_NS
 	select VIRTIO
+
+config RPMSG_VIRTIO_BUF_SIZE
+	int
+	prompt "Virtio RPMSG buffer size"
+	default 512
+	depends on RPMSG_VIRTIO
+	help
+	  Maximum virtio buffer size in bytes for rx and tx virtqueues.
+	  Each buffer will use 16 bytes for the msg header and
+	  remaining for the payload.
+
+	  Leave as default if not sure.
 
 endmenu

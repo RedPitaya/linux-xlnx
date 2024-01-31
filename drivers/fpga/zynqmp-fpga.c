@@ -137,7 +137,7 @@ static int zynqmp_fpga_ops_write(struct fpga_manager *mgr,
 {
 	struct zynqmp_fpga_priv *priv;
 	int word_align, ret, index;
-	dma_addr_t dma_addr = 0;
+	dma_addr_t dma_addr;
 	u32 eemi_flags = 0;
 	size_t dma_size;
 	u32 status;
@@ -424,12 +424,9 @@ static int zynqmp_fpga_probe(struct platform_device *pdev)
 		priv->feature_list = DEFAULT_FEATURE_LIST;
 	}
 
-	mgr = devm_fpga_mgr_create(dev, "Xilinx ZynqMP FPGA Manager",
-				   &zynqmp_fpga_ops, priv);
-	if (!mgr)
-		return -ENOMEM;
-
-	return devm_fpga_mgr_register(dev, mgr);
+	mgr = devm_fpga_mgr_register(dev, "Xilinx ZynqMP FPGA Manager",
+				     &zynqmp_fpga_ops, priv);
+	return PTR_ERR_OR_ZERO(mgr);
 }
 
 #ifdef CONFIG_OF

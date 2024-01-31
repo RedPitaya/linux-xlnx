@@ -61,18 +61,15 @@ static int versal_fpga_probe(struct platform_device *pdev)
 	struct fpga_manager *mgr;
 	int ret;
 
-	ret = dma_set_mask_and_coherent(&pdev->dev, DMA_BIT_MASK(32));
+	ret = dma_set_mask_and_coherent(&pdev->dev, DMA_BIT_MASK(44));
 	if (ret < 0) {
 		dev_err(dev, "no usable DMA configuration\n");
 		return ret;
 	}
 
-	mgr = devm_fpga_mgr_create(dev, "Xilinx Versal FPGA Manager",
-				   &versal_fpga_ops, NULL);
-	if (!mgr)
-		return -ENOMEM;
-
-	return devm_fpga_mgr_register(dev, mgr);
+	mgr = devm_fpga_mgr_register(dev, "Xilinx Versal FPGA Manager",
+				     &versal_fpga_ops, NULL);
+	return PTR_ERR_OR_ZERO(mgr);
 }
 
 static const struct of_device_id versal_fpga_of_match[] = {

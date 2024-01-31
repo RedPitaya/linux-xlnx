@@ -26,6 +26,9 @@ properties:
       - description: For implementations complying for Versal.
         const: xlnx,versal-firmware
 
+      - description: For implementations complying for Versal NET.
+        const: xlnx,versal-net-firmware
+
   method:
     description: |
                  The method of calling the PM-API firmware layer.
@@ -38,6 +41,9 @@ properties:
       - smc
       - hvc
 
+  "#power-domain-cells":
+    const: 1
+
   versal_fpga:
     $ref: /schemas/fpga/xlnx,versal-fpga.yaml#
     description: Compatible of the FPGA device.
@@ -49,6 +55,7 @@ properties:
       used to encrypt or decrypt the data with provided key and initialization
       vector.
     type: object
+    deprecated: true
 
   clock-controller:
     $ref: /schemas/clock/xlnx,versal-clk.yaml#
@@ -66,6 +73,17 @@ additionalProperties: false
 
 examples:
   - |
+    #include <dt-bindings/power/xlnx-zynqmp-power.h>
+    firmware {
+      zynqmp_firmware: zynqmp-firmware {
+        #power-domain-cells = <1>;
+        };
+    };
+
+    sata {
+      power-domains = <&zynqmp_firmware PD_SATA>;
+    };
+
     versal-firmware {
       compatible = "xlnx,versal-firmware";
       method = "smc";
@@ -81,8 +99,8 @@ examples:
       versal_clk: clock-controller {
         #clock-cells = <1>;
         compatible = "xlnx,versal-clk";
-        clocks = <&ref>, <&alt_ref>, <&pl_alt_ref>;
-        clock-names = "ref", "alt_ref", "pl_alt_ref";
+        clocks = <&ref>, <&pl_alt_ref>;
+        clock-names = "ref", "pl_alt_ref";
       };
     };
 

@@ -7,6 +7,7 @@ b) 10G/25G High Speed Ethernet Subsystem.
 c) 10 Gigabit Ethernet Subsystem.
 d) USXGMII Ethernet Subsystem.
 e) MRMAC Ethernet Subsystem.
+f) 1G/10G/25G Switching Ethernet Subsystem.
 
 AXI 1G/2.5G Ethernet Subsystem- also called  AXI 1G/2.5G Ethernet Subsystem,
 the xilinx axi ethernet IP core provides connectivity to an external ethernet
@@ -22,6 +23,9 @@ driver.
 MRMAC is a hardened Ethernet IP on Versal supporting multiple rates from
 10G to 100G which can be used with a soft DMA controller.
 
+The Xilinx 1G/10G/25G Switching Ethernet Subsystem contains integrated MAC
+and PCS and it supports runtime switchable speeds among 1G,10G & 25G.
+
 For details about MDIO please refer phy.txt [1].
 
 Required properties:
@@ -32,19 +36,18 @@ Required properties:
 		  "xlnx,xxv-ethernet-1.0" for 10G/25G MAC,
 		  "xlnx,axi-2_5-gig-ethernet-1.0" for 2.5G MAC,
 		  "xlnx,xxv-usxgmii-ethernet-1.0" for USXGMII and
-		  "xlnx,mrmac-ethernet-1.0" for MRMAC.
+		  "xlnx,mrmac-ethernet-1.0" for MRMAC and
+		  "xlnx,ethernet-1-10-25g-2.7" for switchable 1/10/25G IP.
 - reg		: Address and length of the IO space, as well as the address
                   and length of the AXI DMA controller IO space, unless
                   axistream-connected is specified, in which case the reg
                   attribute of the node referenced by it is used.
 - interrupts	: Should be a list of 2 or 3 interrupts: TX DMA, RX DMA,
 		  and optionally Ethernet core.
-- phy-handle	: Should point to the external phy device.
+- phy-handle	: Should point to the external phy device if exists. Pointing
+		  this to the PCS/PMA PHY is deprecated and should be avoided.
 		  See ethernet.txt file in the same directory.
 - xlnx,rxmem	: Set to allocated memory buffer for Rx/Tx in the hardware
-Required properties (When AxiEthernet is configured with MCDMA):
-- xlnx,channel-ids	: Queue Identifier associated with the MCDMA Channel.
-- interrupt-names	: Should contain the interrupt names.
 
 Required properties when configured as MRMAC:
 - xlnx,mrmac-rate	: Can be 10000 or 25000 providing rate in Mbps.
@@ -63,13 +66,27 @@ Optional properties:
 		  1 to enable partial TX checksum offload,
 		  2 to enable full TX checksum offload
 - xlnx,rxcsum	: Same values as xlnx,txcsum but for RX checksum offload
-- clocks		: Input clock specifier. Refer to common clock bindings.
-- clock-names		: Input clock names. Refer to IP PG for signal description.
-			  1G/2.5G: s_axi_lite_clk, axis_clk and ref_clk.
-			  10G/25G and USXGMII: s_axi_aclk, rx_core_clk and dclk.
-			  10 Gigabit: s_axi_aclk and dclk.
-			  AXI DMA and MCDMA: m_axi_sg_aclk, m_axi_mm2s_aclk and
-			  m_axi_s2mm_aclk.
+- xlnx,switch-x-sgmii : Boolean to indicate the Ethernet core is configured to
+		  support both 1000BaseX and SGMII modes. If set, the phy-mode
+		  should be set to match the mode selected on core reset (i.e.
+		  by the basex_or_sgmii core input line).
+- clock-names: 	  Tuple listing input clock names. Possible clocks:
+		  s_axi_lite_clk: Clock for AXI register slave interface
+		  axis_clk: AXI4-Stream clock for TXD RXD TXC and RXS interfaces
+		  ref_clk: Ethernet reference clock, used by signal delay
+			   primitives and transceivers
+		  mgt_clk: MGT reference clock (used by optional internal
+			   PCS/PMA PHY)
+
+		  Note that if s_axi_lite_clk is not specified by name, the
+		  first clock of any name is used for this. If that is also not
+		  specified, the clock rate is auto-detected from the CPU clock
+		  (but only on platforms where this is possible). New device
+		  trees should specify all applicable clocks by name - the
+		  fallbacks to an unnamed clock or to CPU clock are only for
+		  backward compatibility.
+- clocks: 	  Phandles to input clocks matching clock-names. Refer to common
+		  clock bindings.
  - mdio		: Child node for MDIO bus. Must be defined if PHY access is
 		  required through the core's MDIO interface (i.e. always,
 		  unless the PHY is accessed through a different bus).
@@ -87,13 +104,15 @@ Optional properties (When USXGMII is in use):
 - xlnx,usxgmii-rate	: USXGMII PHY speed - can be 10, 100, 1000, 2500,
 			  5000 or 10000.
 
-Optional properties (When AxiEthernet is configured with MCDMA):
-- xlnx,num-queues	: Number of queues h/w configured for.
-
 Optional properties for MRMAC:
 - xlnx,phcindex		: Indicate the index of the physical hardware clock
 			  to be used as per PTP clock connected to the given
 			  MRMAC lane. Valid range is 0 to 3.
+			  This property is deprecated.
+
+Optional properties for MRMAC and 10G/25G:
+- ptp-hardware-clock	: Indicate the xilinx PTP device node to read PTP clock
+			  index(/dev/ptp0 etc).
 
 NOTE: Time Sensitive Networking (TSN) related DT bindings are explained in [4].
 
@@ -102,6 +121,10 @@ NOTE: Time Sensitive Networking (TSN) related DT bindings are explained in [4].
 [3] Documentation/devicetree/bindings/net/xilinx-phy.txt
 [4] Documentation/devicetree/bindings/net/xilinx_tsn.txt
 
+ - pcs-handle: 	  Phandle to the internal PCS/PMA PHY in SGMII or 1000Base-X
+		  modes, where "pcs-handle" should be used to point
+		  to the PCS/PMA PHY, and "phy-handle" should point to an
+		  external PHY if exists.
 
 Example: AXI 1G/2.5G Ethernet Subsystem + AXIDMA
 
@@ -165,4 +188,5 @@ Example for MRMAC Ethernet subsystem with MCDMA:
 		xlnx,gtctrl = <&gt_ctrl>;
 		xlnx,gtlane = <0x0>;
 		xlnx,rxmem = <0x8000>;
+		ptp-hardware-clock = <&ptp_device>;
 	};

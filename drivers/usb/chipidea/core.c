@@ -53,6 +53,7 @@ static const u8 ci_regs_nolpm[] = {
 	[OP_USBCMD]		= 0x00U,
 	[OP_USBSTS]		= 0x04U,
 	[OP_USBINTR]		= 0x08U,
+	[OP_FRINDEX]		= 0x0CU,
 	[OP_DEVICEADDR]		= 0x14U,
 	[OP_ENDPTLISTADDR]	= 0x18U,
 	[OP_TTCTRL]		= 0x1CU,
@@ -78,6 +79,7 @@ static const u8 ci_regs_lpm[] = {
 	[OP_USBCMD]		= 0x00U,
 	[OP_USBSTS]		= 0x04U,
 	[OP_USBINTR]		= 0x08U,
+	[OP_FRINDEX]		= 0x0CU,
 	[OP_DEVICEADDR]		= 0x14U,
 	[OP_ENDPTLISTADDR]	= 0x18U,
 	[OP_TTCTRL]		= 0x1CU,
@@ -324,8 +326,7 @@ static int _ci_usb_phy_init(struct ci_hdrc *ci)
 
 		ret = phy_power_on(ci->phy);
 		if (ret) {
-			if (phy_exit(ci->phy) < 0)
-				dev_dbg(ci->dev, "phy exit failed\r\n");
+			phy_exit(ci->phy);
 			return ret;
 		}
 	} else {
@@ -342,20 +343,12 @@ static int _ci_usb_phy_init(struct ci_hdrc *ci)
  */
 static void ci_usb_phy_exit(struct ci_hdrc *ci)
 {
-	int ret;
-
 	if (ci->platdata->flags & CI_HDRC_OVERRIDE_PHY_CONTROL)
 		return;
 
 	if (ci->phy) {
-		ret = phy_power_off(ci->phy);
-		if (ret < 0)
-			dev_dbg(ci->dev, "phy poweroff failed\r\n");
-
-		ret = phy_exit(ci->phy);
-		if (ret < 0)
-			dev_dbg(ci->dev, "phy exit failed\r\n");
-
+		phy_power_off(ci->phy);
+		phy_exit(ci->phy);
 	} else {
 		usb_phy_shutdown(ci->usb_phy);
 	}
@@ -523,7 +516,7 @@ int hw_device_reset(struct ci_hdrc *ci)
 	return 0;
 }
 
-static irqreturn_t ci_irq(int irq, void *data)
+static irqreturn_t ci_irq_handler(int irq, void *data)
 {
 	struct ci_hdrc *ci = data;
 	irqreturn_t ret = IRQ_NONE;
@@ -576,6 +569,15 @@ static irqreturn_t ci_irq(int irq, void *data)
 	return ret;
 }
 
+static void ci_irq(struct ci_hdrc *ci)
+{
+	unsigned long flags;
+
+	local_irq_save(flags);
+	ci_irq_handler(ci->irq, ci);
+	local_irq_restore(flags);
+}
+
 static int ci_cable_notifier(struct notifier_block *nb, unsigned long event,
 			     void *ptr)
 {
@@ -585,7 +587,7 @@ static int ci_cable_notifier(struct notifier_block *nb, unsigned long event,
 	cbl->connected = event;
 	cbl->changed = true;
 
-	ci_irq(ci->irq, ci);
+	ci_irq(ci);
 	return NOTIFY_DONE;
 }
 
@@ -626,7 +628,7 @@ static int ci_usb_role_switch_set(struct usb_role_switch *sw,
 	if (cable) {
 		cable->changed = true;
 		cable->connected = false;
-		ci_irq(ci->irq, ci);
+		ci_irq(ci);
 		spin_unlock_irqrestore(&ci->lock, flags);
 		if (ci->wq && role != USB_ROLE_NONE)
 			flush_workqueue(ci->wq);
@@ -644,7 +646,7 @@ static int ci_usb_role_switch_set(struct usb_role_switch *sw,
 	if (cable) {
 		cable->changed = true;
 		cable->connected = true;
-		ci_irq(ci->irq, ci);
+		ci_irq(ci);
 	}
 	spin_unlock_irqrestore(&ci->lock, flags);
 	pm_runtime_put_sync(ci->dev);
@@ -709,16 +711,13 @@ static int ci_get_platdata(struct device *dev,
 	if (usb_get_maximum_speed(dev) == USB_SPEED_FULL)
 		platdata->flags |= CI_HDRC_FORCE_FULLSPEED;
 
-	if (of_property_read_u32(dev->of_node, "phy-clkgate-delay-us",
-				 &platdata->phy_clkgate_delay_us))
-		dev_dbg(dev, "Missing phy-clkgate-delay-us property\n");
+	of_property_read_u32(dev->of_node, "phy-clkgate-delay-us",
+			     &platdata->phy_clkgate_delay_us);
 
 	platdata->itc_setting = 1;
 
-	if (of_property_read_u32(dev->of_node, "itc-setting",
-				 &platdata->itc_setting))
-		dev_dbg(dev, "Missing itc-setting property\n");
-
+	of_property_read_u32(dev->of_node, "itc-setting",
+			     &platdata->itc_setting);
 
 	ret = of_property_read_u32(dev->of_node, "ahb-burst-config",
 				&platdata->ahb_burst_config);
@@ -867,6 +866,7 @@ struct platform_device *ci_hdrc_add_device(struct device *dev,
 	}
 
 	pdev->dev.parent = dev;
+	device_set_of_node_from_dev(&pdev->dev, dev);
 
 	ret = platform_device_add_resources(pdev, res, nres);
 	if (ret)
@@ -1186,7 +1186,7 @@ static int ci_hdrc_probe(struct platform_device *pdev)
 		}
 	}
 
-	ret = devm_request_irq(dev, ci->irq, ci_irq, IRQF_SHARED,
+	ret = devm_request_irq(dev, ci->irq, ci_irq_handler, IRQF_SHARED,
 			ci->platdata->name, ci);
 	if (ret)
 		goto stop;
@@ -1307,11 +1307,11 @@ static void ci_extcon_wakeup_int(struct ci_hdrc *ci)
 
 	if (!IS_ERR(cable_id->edev) && ci->is_otg &&
 		(otgsc & OTGSC_IDIE) && (otgsc & OTGSC_IDIS))
-		ci_irq(ci->irq, ci);
+		ci_irq(ci);
 
 	if (!IS_ERR(cable_vbus->edev) && ci->is_otg &&
 		(otgsc & OTGSC_BSVIE) && (otgsc & OTGSC_BSVIS))
-		ci_irq(ci->irq, ci);
+		ci_irq(ci);
 }
 
 static int ci_controller_resume(struct device *dev)

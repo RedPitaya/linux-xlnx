@@ -82,19 +82,19 @@
 		clocks = <&vc7_2 2>;
 	};
 
-	gtclk2_out6_ddr1: gtclk2-out6 {
+	gtclk2_out6_ddr1: gtclk2-out6-ddr1 {
 		status = "okay";
 		compatible = "xlnx,fclk";
 		clocks = <&vc7_2 3>;
 	};
 
-	gtclk2_out7_ddr2: gtclk2-out7 {
+	gtclk2_out7_ddr2: gtclk2-out7-ddr2 {
 		status = "okay";
 		compatible = "xlnx,fclk";
 		clocks = <&vc7_2 4>;
 	};
 
-	gtclk2_ref_clk: gtclk2-out8 {
+	gtclk2_ref_clk: gtclk2-ref-clk {
 		status = "okay";
 		compatible = "xlnx,fclk";
 		clocks = <&vc7_2 5>;
@@ -116,7 +116,7 @@
 		reg = <0x20>;
 		gpio-controller; /* interrupt not connected */
 		#gpio-cells = <2>;
-		gpio-line-names = "", "", "QSFPDD1_MODSELL", "QSFPDD1_MODSELL", /* 0 - 3 */
+		gpio-line-names = "", "", "QSFPDD1_MODSELL", "QSFPDD2_MODSELL", /* 0 - 3 */
 				"PMBUS2_INA226_ALERT", "", "", "", /* 4 - 7 */
 				"FMCP1_FMC_PRSNT_M2C_B", "", "FMCP1_FMCP_PRSNT_M2C_B", "", /* 10 - 13 */
 				"VCCINT_VRHOT_B", "8A34001_EXP_RST_B", "PMBUS_ALERT", "PMBUS1_INA226_ALERT"; /* 14 - 17 */
@@ -312,6 +312,7 @@
 			reg = <5>;
 			vc7_1: clock-generator@9 {
 				compatible = "renesas,rc21008a";
+				clock-output-names = "rc21008a-0";
 				reg = <0x9>;
 				#clock-cells = <1>;
 				clocks = <&vc7_xin>;
@@ -325,6 +326,7 @@
 			reg = <6>;
 			vc7_2: clock-generator@9 {
 				compatible = "renesas,rc21008a";
+				clock-output-names = "rc21008a-1";
 				reg = <0x9>;
 				#clock-cells = <1>;
 				clocks = <&vc7_xin>;
