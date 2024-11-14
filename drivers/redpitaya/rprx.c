@@ -27,7 +27,7 @@
 #include <linux/slab.h>
 #include <linux/wait.h>
 #include <linux/dma/xilinx_dma.h>
-#include <linux/dma-mapping.h>1
+#include <linux/dma-mapping.h>
 #include <linux/interrupt.h>
 #include <linux/sched.h>
 #include <linux/semaphore.h>
