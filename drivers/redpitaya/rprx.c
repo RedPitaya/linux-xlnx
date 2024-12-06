@@ -108,11 +108,12 @@ int rprx_open(struct inode * i, struct file * f)
 int rprx_read(struct file *filep, char *buff, size_t len, loff_t *off)
 {
 	struct rprx_channel *rx = (struct rprx_channel *)filep->private_data;
-	dev_info((const struct device *)&rx->rpdev->dev, "read wait flag:%d timeout: %d\n",rx->flag, rx->read_timeout_s * HZ);
+	dev_info((const struct device *)&rx->rpdev->dev, "read wait flag:%d timeout: %lu\n",rx->flag, rx->read_timeout_s * HZ);
 	if (rx->read_timeout_s != 0){
 		int ret = wait_event_interruptible_timeout(rx->wq, rx->flag != 0 , rx->read_timeout_s * HZ);
 		if (ret != 0){
 			rx->dmastatus=STATUS_TIMEOUT;
+			len = 0;
 		}
 	}else{
 		wait_event_interruptible(rx->wq, rx->flag != 0);
@@ -145,7 +146,7 @@ static long rprx_ioctl(struct file *file, unsigned int cmd , unsigned long arg)
 	}break;
 
 	case TIMEOUT:{
-		dev_info(dev,"ioctl set read timeout %u s\n",arg);
+		dev_info(dev,"ioctl set read timeout %lu s\n",arg);
 		rx->read_timeout_s=arg;
 	}break;
 
