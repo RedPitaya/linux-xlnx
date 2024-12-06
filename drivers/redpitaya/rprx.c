@@ -22,6 +22,7 @@
 #include <linux/kthread.h>
 #include <linux/of_dma.h>
 #include <linux/cdev.h>
+#include <linux/jiffies.h>
 #include <linux/platform_device.h>
 #include <linux/random.h>
 #include <linux/slab.h>
@@ -65,6 +66,7 @@ struct rprx_channel{
 	unsigned num_devices;
     unsigned int minor_num;
     unsigned int major_num;
+	unsigned long read_timeout_s;
 };
 
 
@@ -106,8 +108,15 @@ int rprx_open(struct inode * i, struct file * f)
 int rprx_read(struct file *filep, char *buff, size_t len, loff_t *off)
 {
 	struct rprx_channel *rx = (struct rprx_channel *)filep->private_data;
-	dev_info((const struct device *)&rx->rpdev->dev, "read wait flag:%d\n",rx->flag);
-	wait_event_interruptible(rx->wq, rx->flag != 0);
+	dev_info((const struct device *)&rx->rpdev->dev, "read wait flag:%d timeout: %d\n",rx->flag, rx->read_timeout_s * HZ);
+	if (rx->read_timeout_s != 0){
+		int ret = wait_event_interruptible_timeout(rx->wq, rx->flag != 0 , rx->read_timeout_s * HZ);
+		if (ret != 0){
+			rx->dmastatus=STATUS_TIMEOUT;
+		}
+	}else{
+		wait_event_interruptible(rx->wq, rx->flag != 0);
+	}
 	rx->flag = 0;
 	dev_info((const struct device *)&rx->rpdev->dev, "read go\n");
 	return len;
@@ -133,6 +142,11 @@ static long rprx_ioctl(struct file *file, unsigned int cmd , unsigned long arg)
 		rx->flag = 1;
 		wake_up_interruptible(&rx->wq);
 		rx->dmastatus=STATUS_STOPPED;
+	}break;
+
+	case TIMEOUT:{
+		dev_info(dev,"ioctl set read timeout %u s\n",arg);
+		rx->read_timeout_s=arg;
 	}break;
 
 	/*
@@ -267,7 +281,7 @@ static int rprx_probe(struct platform_device *pd)
 	rx->rpdev=pd;
 
 	platform_set_drvdata( rx->rpdev, rx );
-
+	rx->read_timeout_s=0;
 	rx->minor_num=MINORNMBR;
 	rx->major_num=MAJORNMBR;
 	rx->num_devices=NO_DMA_DEVICES;
