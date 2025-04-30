@@ -1431,6 +1431,15 @@ xm2msc_cal_imagesize(struct xm2msc_chan_ctx *chan_ctx,
 		q_data->sizeimage[0] +=
 				q_data->stride * (height / 2);
 		break;
+	case V4L2_PIX_FMT_NV16:
+	case V4L2_PIX_FMT_XV20:
+		/*
+		 * Adding chroma plane size as NV16
+		 * have a contiguous buffer for luma and chrome
+		 */
+		q_data->sizeimage[0] +=
+				q_data->stride * height;
+		break;
 	case V4L2_PIX_FMT_NV12M:
 	case V4L2_PIX_FMT_XV15M:
 		q_data->sizeimage[1] =
@@ -2486,5 +2495,5 @@ static struct platform_driver xm2m_msc_driver = {
 module_platform_driver(xm2m_msc_driver);
 
 MODULE_DESCRIPTION("Xilinx M2M Multi-Scaler Driver");
-MODULE_LICENSE("GPL v2");
+MODULE_LICENSE("GPL");
 MODULE_ALIAS("xlnx_m2m_multiscaler_dev");

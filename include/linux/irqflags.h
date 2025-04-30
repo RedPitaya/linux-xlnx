@@ -13,6 +13,7 @@
 #define _LINUX_TRACE_IRQFLAGS_H
 
 #include <linux/typecheck.h>
+#include <linux/cleanup.h>
 #include <asm/irqflags.h>
 #include <asm/percpu.h>
 
@@ -20,13 +21,13 @@
 #ifdef CONFIG_PROVE_LOCKING
   extern void lockdep_softirqs_on(unsigned long ip);
   extern void lockdep_softirqs_off(unsigned long ip);
-  extern void lockdep_hardirqs_on_prepare(unsigned long ip);
+  extern void lockdep_hardirqs_on_prepare(void);
   extern void lockdep_hardirqs_on(unsigned long ip);
   extern void lockdep_hardirqs_off(unsigned long ip);
 #else
   static inline void lockdep_softirqs_on(unsigned long ip) { }
   static inline void lockdep_softirqs_off(unsigned long ip) { }
-  static inline void lockdep_hardirqs_on_prepare(unsigned long ip) { }
+  static inline void lockdep_hardirqs_on_prepare(void) { }
   static inline void lockdep_hardirqs_on(unsigned long ip) { }
   static inline void lockdep_hardirqs_off(unsigned long ip) { }
 #endif
@@ -70,14 +71,6 @@ do {						\
 # define lockdep_hardirq_exit()			\
 do {						\
 	__this_cpu_dec(hardirq_context);	\
-} while (0)
-# define lockdep_softirq_enter()		\
-do {						\
-	current->softirq_context++;		\
-} while (0)
-# define lockdep_softirq_exit()			\
-do {						\
-	current->softirq_context--;		\
 } while (0)
 
 # define lockdep_hrtimer_enter(__hrtimer)		\
@@ -138,6 +131,21 @@ do {						\
 # define lockdep_posixtimer_exit()		do { } while (0)
 # define lockdep_irq_work_enter(__work)		do { } while (0)
 # define lockdep_irq_work_exit(__work)		do { } while (0)
+#endif
+
+#if defined(CONFIG_TRACE_IRQFLAGS) && !defined(CONFIG_PREEMPT_RT)
+# define lockdep_softirq_enter()		\
+do {						\
+	current->softirq_context++;		\
+} while (0)
+# define lockdep_softirq_exit()			\
+do {						\
+	current->softirq_context--;		\
+} while (0)
+
+#else
+# define lockdep_softirq_enter()		do { } while (0)
+# define lockdep_softirq_exit()			do { } while (0)
 #endif
 
 #if defined(CONFIG_IRQSOFF_TRACER) || \
@@ -259,5 +267,11 @@ extern void warn_bogus_irq_restore(void);
 #endif /* CONFIG_TRACE_IRQFLAGS_SUPPORT */
 
 #define irqs_disabled_flags(flags) raw_irqs_disabled_flags(flags)
+
+DEFINE_LOCK_GUARD_0(irq, local_irq_disable(), local_irq_enable())
+DEFINE_LOCK_GUARD_0(irqsave,
+		    local_irq_save(_T->flags),
+		    local_irq_restore(_T->flags),
+		    unsigned long flags)
 
 #endif

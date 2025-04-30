@@ -166,8 +166,7 @@ int nand_onfi_detect(struct nand_chip *chip)
 	if (!pbuf)
 		return -ENOMEM;
 
-	if (!nand_has_exec_op(chip) ||
-	    !nand_read_data_op(chip, &pbuf[0], sizeof(*pbuf), true, true))
+	if (!nand_has_exec_op(chip) || chip->controller->supported_op.data_only_read)
 		use_datain = true;
 
 	for (i = 0; i < ONFI_PARAM_PAGES; i++) {
@@ -304,6 +303,9 @@ int nand_onfi_detect(struct nand_chip *chip)
 			   ONFI_FEATURE_ADDR_TIMING_MODE, 1);
 	}
 
+	if (le16_to_cpu(p->opt_cmd) & ONFI_OPT_CMD_READ_CACHE)
+		chip->parameters.supports_read_cache = true;
+
 	onfi = kzalloc(sizeof(*onfi), GFP_KERNEL);
 	if (!onfi) {
 		ret = -ENOMEM;
@@ -319,7 +321,6 @@ int nand_onfi_detect(struct nand_chip *chip)
 	onfi->sdr_timing_modes = le16_to_cpu(p->sdr_timing_modes);
 	if (le16_to_cpu(p->features) & ONFI_FEATURE_NV_DDR)
 		onfi->nvddr_timing_modes = le16_to_cpu(p->nvddr_timing_modes);
-	onfi->jedec_id = le16_to_cpu(p->jedec_id);
 	onfi->vendor_revision = le16_to_cpu(p->vendor_revision);
 	memcpy(onfi->vendor, p->vendor, sizeof(p->vendor));
 	chip->parameters.onfi = onfi;

@@ -66,6 +66,7 @@ struct nfulnl_instance {
 	struct sk_buff *skb;		/* pre-allocatd skb */
 	struct timer_list timer;
 	struct net *net;
+	netns_tracker ns_tracker;
 	struct user_namespace *peer_user_ns;	/* User namespace of the peer process */
 	u32 peer_portid;		/* PORTID of the peer process */
 
@@ -102,9 +103,9 @@ static inline u_int8_t instance_hashfn(u_int16_t group_num)
 }
 
 static struct nfulnl_instance *
-__instance_lookup(struct nfnl_log_net *log, u_int16_t group_num)
+__instance_lookup(const struct nfnl_log_net *log, u16 group_num)
 {
-	struct hlist_head *head;
+	const struct hlist_head *head;
 	struct nfulnl_instance *inst;
 
 	head = &log->instance_table[instance_hashfn(group_num)];
@@ -122,15 +123,25 @@ instance_get(struct nfulnl_instance *inst)
 }
 
 static struct nfulnl_instance *
-instance_lookup_get(struct nfnl_log_net *log, u_int16_t group_num)
+instance_lookup_get_rcu(const struct nfnl_log_net *log, u16 group_num)
 {
 	struct nfulnl_instance *inst;
 
-	rcu_read_lock_bh();
 	inst = __instance_lookup(log, group_num);
 	if (inst && !refcount_inc_not_zero(&inst->use))
 		inst = NULL;
-	rcu_read_unlock_bh();
+
+	return inst;
+}
+
+static struct nfulnl_instance *
+instance_lookup_get(const struct nfnl_log_net *log, u16 group_num)
+{
+	struct nfulnl_instance *inst;
+
+	rcu_read_lock();
+	inst = instance_lookup_get_rcu(log, group_num);
+	rcu_read_unlock();
 
 	return inst;
 }
@@ -140,7 +151,7 @@ static void nfulnl_instance_free_rcu(struct rcu_head *head)
 	struct nfulnl_instance *inst =
 		container_of(head, struct nfulnl_instance, rcu);
 
-	put_net(inst->net);
+	put_net_track(inst->net, &inst->ns_tracker);
 	kfree(inst);
 	module_put(THIS_MODULE);
 }
@@ -187,7 +198,7 @@ instance_create(struct net *net, u_int16_t group_num,
 
 	timer_setup(&inst->timer, nfulnl_timer, 0);
 
-	inst->net = get_net(net);
+	inst->net = get_net_track(net, &inst->ns_tracker, GFP_ATOMIC);
 	inst->peer_user_ns = user_ns;
 	inst->peer_portid = portid;
 	inst->group_num = group_num;
@@ -556,7 +567,8 @@ __build_packet_message(struct nfnl_log_net *log,
 		goto nla_put_failure;
 
 	if (indev && skb->dev &&
-	    skb->mac_header != skb->network_header) {
+	    skb_mac_header_was_set(skb) &&
+	    skb_mac_header_len(skb) != 0) {
 		struct nfulnl_msg_packet_hw phw;
 		int len;
 
@@ -586,9 +598,9 @@ __build_packet_message(struct nfnl_log_net *log,
 			goto nla_put_failure;
 	}
 
-	if (hooknum <= NF_INET_FORWARD && skb->tstamp) {
+	if (hooknum <= NF_INET_FORWARD) {
+		struct timespec64 kts = ktime_to_timespec64(skb_tstamp_cond(skb, true));
 		struct nfulnl_msg_packet_timestamp ts;
-		struct timespec64 kts = ktime_to_timespec64(skb->tstamp);
 		ts.sec = cpu_to_be64(kts.tv_sec);
 		ts.usec = cpu_to_be64(kts.tv_nsec / NSEC_PER_USEC);
 
@@ -686,15 +698,15 @@ nfulnl_log_packet(struct net *net,
 	unsigned int plen = 0;
 	struct nfnl_log_net *log = nfnl_log_pernet(net);
 	const struct nfnl_ct_hook *nfnl_ct = NULL;
+	enum ip_conntrack_info ctinfo = 0;
 	struct nf_conn *ct = NULL;
-	enum ip_conntrack_info ctinfo;
 
 	if (li_user && li_user->type == NF_LOG_TYPE_ULOG)
 		li = li_user;
 	else
 		li = &default_loginfo;
 
-	inst = instance_lookup_get(log, li->u.ulog.group);
+	inst = instance_lookup_get_rcu(log, li->u.ulog.group);
 	if (!inst)
 		return;
 
@@ -1026,7 +1038,7 @@ static struct hlist_node *get_first(struct net *net, struct iter_state *st)
 		struct hlist_head *head = &log->instance_table[st->bucket];
 
 		if (!hlist_empty(head))
-			return rcu_dereference_bh(hlist_first_rcu(head));
+			return rcu_dereference(hlist_first_rcu(head));
 	}
 	return NULL;
 }
@@ -1034,7 +1046,7 @@ static struct hlist_node *get_first(struct net *net, struct iter_state *st)
 static struct hlist_node *get_next(struct net *net, struct iter_state *st,
 				   struct hlist_node *h)
 {
-	h = rcu_dereference_bh(hlist_next_rcu(h));
+	h = rcu_dereference(hlist_next_rcu(h));
 	while (!h) {
 		struct nfnl_log_net *log;
 		struct hlist_head *head;
@@ -1044,7 +1056,7 @@ static struct hlist_node *get_next(struct net *net, struct iter_state *st,
 
 		log = nfnl_log_pernet(net);
 		head = &log->instance_table[st->bucket];
-		h = rcu_dereference_bh(hlist_first_rcu(head));
+		h = rcu_dereference(hlist_first_rcu(head));
 	}
 	return h;
 }
@@ -1062,9 +1074,9 @@ static struct hlist_node *get_idx(struct net *net, struct iter_state *st,
 }
 
 static void *seq_start(struct seq_file *s, loff_t *pos)
-	__acquires(rcu_bh)
+	__acquires(rcu)
 {
-	rcu_read_lock_bh();
+	rcu_read_lock();
 	return get_idx(seq_file_net(s), s->private, *pos);
 }
 
@@ -1075,9 +1087,9 @@ static void *seq_next(struct seq_file *s, void *v, loff_t *pos)
 }
 
 static void seq_stop(struct seq_file *s, void *v)
-	__releases(rcu_bh)
+	__releases(rcu)
 {
-	rcu_read_unlock_bh();
+	rcu_read_unlock();
 }
 
 static int seq_show(struct seq_file *s, void *v)

@@ -150,7 +150,7 @@ int inet_diag_msg_attrs_fill(struct sock *sk, struct sk_buff *skb,
 	}
 #endif
 
-	if (net_admin && nla_put_u32(skb, INET_DIAG_MARK, sk->sk_mark))
+	if (net_admin && nla_put_u32(skb, INET_DIAG_MARK, READ_ONCE(sk->sk_mark)))
 		goto errout;
 
 	if (ext & (1 << (INET_DIAG_CLASS_ID - 1)) ||
@@ -182,17 +182,17 @@ int inet_diag_msg_attrs_fill(struct sock *sk, struct sk_buff *skb,
 	r->idiag_inode = sock_i_ino(sk);
 
 	memset(&inet_sockopt, 0, sizeof(inet_sockopt));
-	inet_sockopt.recverr	= inet->recverr;
-	inet_sockopt.is_icsk	= inet->is_icsk;
-	inet_sockopt.freebind	= inet->freebind;
-	inet_sockopt.hdrincl	= inet->hdrincl;
-	inet_sockopt.mc_loop	= inet->mc_loop;
-	inet_sockopt.transparent = inet->transparent;
-	inet_sockopt.mc_all	= inet->mc_all;
-	inet_sockopt.nodefrag	= inet->nodefrag;
-	inet_sockopt.bind_address_no_port = inet->bind_address_no_port;
-	inet_sockopt.recverr_rfc4884 = inet->recverr_rfc4884;
-	inet_sockopt.defer_connect = inet->defer_connect;
+	inet_sockopt.recverr	= inet_test_bit(RECVERR, sk);
+	inet_sockopt.is_icsk	= inet_test_bit(IS_ICSK, sk);
+	inet_sockopt.freebind	= inet_test_bit(FREEBIND, sk);
+	inet_sockopt.hdrincl	= inet_test_bit(HDRINCL, sk);
+	inet_sockopt.mc_loop	= inet_test_bit(MC_LOOP, sk);
+	inet_sockopt.transparent = inet_test_bit(TRANSPARENT, sk);
+	inet_sockopt.mc_all	= inet_test_bit(MC_ALL, sk);
+	inet_sockopt.nodefrag	= inet_test_bit(NODEFRAG, sk);
+	inet_sockopt.bind_address_no_port = inet_test_bit(BIND_ADDRESS_NO_PORT, sk);
+	inet_sockopt.recverr_rfc4884 = inet_test_bit(RECVERR_RFC4884, sk);
+	inet_sockopt.defer_connect = inet_test_bit(DEFER_CONNECT, sk);
 	if (nla_put(skb, INET_DIAG_SOCKOPT, sizeof(inet_sockopt),
 		    &inet_sockopt))
 		goto errout;
@@ -261,6 +261,7 @@ int inet_sk_diag_fill(struct sock *sk, struct inet_connection_sock *icsk,
 	r->idiag_state = sk->sk_state;
 	r->idiag_timer = 0;
 	r->idiag_retrans = 0;
+	r->idiag_expires = 0;
 
 	if (inet_diag_msg_attrs_fill(sk, skb, r, ext,
 				     sk_user_ns(NETLINK_CB(cb->skb).sk),
@@ -271,7 +272,7 @@ int inet_sk_diag_fill(struct sock *sk, struct inet_connection_sock *icsk,
 		struct inet_diag_meminfo minfo = {
 			.idiag_rmem = sk_rmem_alloc_get(sk),
 			.idiag_wmem = READ_ONCE(sk->sk_wmem_queued),
-			.idiag_fmem = sk->sk_forward_alloc,
+			.idiag_fmem = sk_forward_alloc_get(sk),
 			.idiag_tmem = sk_wmem_alloc_get(sk),
 		};
 
@@ -314,9 +315,6 @@ int inet_sk_diag_fill(struct sock *sk, struct inet_connection_sock *icsk,
 		r->idiag_retrans = icsk->icsk_probes_out;
 		r->idiag_expires =
 			jiffies_delta_to_msecs(sk->sk_timer.expires - jiffies);
-	} else {
-		r->idiag_timer = 0;
-		r->idiag_expires = 0;
 	}
 
 	if ((ext & (1 << (INET_DIAG_INFO - 1))) && handler->idiag_info_size) {
@@ -801,7 +799,7 @@ int inet_diag_bc_sk(const struct nlattr *bc, struct sock *sk)
 	entry.ifindex = sk->sk_bound_dev_if;
 	entry.userlocks = sk_fullsock(sk) ? sk->sk_userlocks : 0;
 	if (sk_fullsock(sk))
-		entry.mark = sk->sk_mark;
+		entry.mark = READ_ONCE(sk->sk_mark);
 	else if (sk->sk_state == TCP_NEW_SYN_RECV)
 		entry.mark = inet_rsk(inet_reqsk(sk))->ir_mark;
 	else if (sk->sk_state == TCP_TIME_WAIT)
@@ -1030,12 +1028,13 @@ void inet_diag_dump_icsk(struct inet_hashinfo *hashinfo, struct sk_buff *skb,
 		if (!(idiag_states & TCPF_LISTEN) || r->id.idiag_dport)
 			goto skip_listen_ht;
 
-		for (i = s_i; i < INET_LHTABLE_SIZE; i++) {
+		for (i = s_i; i <= hashinfo->lhash2_mask; i++) {
 			struct inet_listen_hashbucket *ilb;
 			struct hlist_nulls_node *node;
 
 			num = 0;
-			ilb = &hashinfo->listening_hash[i];
+			ilb = &hashinfo->lhash2[i];
+
 			spin_lock(&ilb->lock);
 			sk_nulls_for_each(sk, node, &ilb->nulls_head) {
 				struct inet_sock *inet = inet_sk(sk);

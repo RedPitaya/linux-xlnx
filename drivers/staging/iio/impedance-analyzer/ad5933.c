@@ -674,9 +674,9 @@ static void ad5933_clk_disable(void *data)
 	clk_disable_unprepare(st->mclk);
 }
 
-static int ad5933_probe(struct i2c_client *client,
-			const struct i2c_device_id *id)
+static int ad5933_probe(struct i2c_client *client)
 {
+	const struct i2c_device_id *id = i2c_client_get_device_id(client);
 	int ret;
 	struct ad5933_state *st;
 	struct iio_dev *indio_dev;
@@ -749,7 +749,6 @@ static int ad5933_probe(struct i2c_client *client,
 	indio_dev->num_channels = ARRAY_SIZE(ad5933_channels);
 
 	ret = devm_iio_kfifo_buffer_setup(&client->dev, indio_dev,
-					  INDIO_BUFFER_SOFTWARE,
 					  &ad5933_ring_setup_ops);
 	if (ret)
 		return ret;

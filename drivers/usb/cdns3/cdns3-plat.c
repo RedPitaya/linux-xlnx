@@ -13,7 +13,9 @@
  */
 
 #include <linux/module.h>
+#include <linux/irq.h>
 #include <linux/kernel.h>
+#include <linux/of.h>
 #include <linux/platform_device.h>
 #include <linux/pm_runtime.h>
 
@@ -65,13 +67,14 @@ static int cdns3_plat_probe(struct platform_device *pdev)
 
 	platform_set_drvdata(pdev, cdns);
 
-	res = platform_get_resource_byname(pdev, IORESOURCE_IRQ, "host");
-	if (!res) {
-		dev_err(dev, "missing host IRQ\n");
-		return -ENODEV;
-	}
+	ret = platform_get_irq_byname(pdev, "host");
+	if (ret < 0)
+		return ret;
 
-	cdns->xhci_res[0] = *res;
+	cdns->xhci_res[0].start = ret;
+	cdns->xhci_res[0].end = ret;
+	cdns->xhci_res[0].flags = IORESOURCE_IRQ | irq_get_trigger_type(ret);
+	cdns->xhci_res[0].name = "host";
 
 	res = platform_get_resource_byname(pdev, IORESOURCE_MEM, "xhci");
 	if (!res) {
@@ -108,8 +111,6 @@ static int cdns3_plat_probe(struct platform_device *pdev)
 	cdns->wakeup_irq = platform_get_irq_byname_optional(pdev, "wakeup");
 	if (cdns->wakeup_irq == -EPROBE_DEFER)
 		return cdns->wakeup_irq;
-	else if (cdns->wakeup_irq == 0)
-		return -EINVAL;
 
 	if (cdns->wakeup_irq < 0) {
 		dev_dbg(dev, "couldn't get wakeup irq\n");
@@ -175,7 +176,7 @@ err_phy3_init:
  *
  * Returns 0 on success otherwise negative errno
  */
-static int cdns3_plat_remove(struct platform_device *pdev)
+static void cdns3_plat_remove(struct platform_device *pdev)
 {
 	struct cdns *cdns = platform_get_drvdata(pdev);
 	struct device *dev = cdns->dev;
@@ -187,7 +188,6 @@ static int cdns3_plat_remove(struct platform_device *pdev)
 	set_phy_power_off(cdns);
 	phy_exit(cdns->usb2_phy);
 	phy_exit(cdns->usb3_phy);
-	return 0;
 }
 
 #ifdef CONFIG_PM
@@ -256,9 +256,10 @@ static int cdns3_controller_resume(struct device *dev, pm_message_t msg)
 	cdns3_set_platform_suspend(cdns->dev, false, false);
 
 	spin_lock_irqsave(&cdns->lock, flags);
-	cdns_resume(cdns, !PMSG_IS_AUTO(msg));
+	cdns_resume(cdns);
 	cdns->in_lpm = false;
 	spin_unlock_irqrestore(&cdns->lock, flags);
+	cdns_set_active(cdns, !PMSG_IS_AUTO(msg));
 	if (cdns->wakeup_pending) {
 		cdns->wakeup_pending = false;
 		enable_irq(cdns->wakeup_irq);
@@ -320,7 +321,7 @@ MODULE_DEVICE_TABLE(of, of_cdns3_match);
 
 static struct platform_driver cdns3_driver = {
 	.probe		= cdns3_plat_probe,
-	.remove		= cdns3_plat_remove,
+	.remove_new	= cdns3_plat_remove,
 	.driver		= {
 		.name	= "cdns-usb3",
 		.of_match_table	= of_match_ptr(of_cdns3_match),

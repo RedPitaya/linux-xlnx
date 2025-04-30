@@ -319,7 +319,7 @@ static int tps544_probe(struct i2c_client *client)
 	return pmbus_do_probe(client, info);
 }
 
-static int tps544_remove(struct i2c_client *client)
+static void tps544_remove(struct i2c_client *client)
 {
 #if IS_ENABLED(CONFIG_SENSORS_TPS544_REGULATOR)
 	struct device *dev = &client->dev;
@@ -328,7 +328,6 @@ static int tps544_remove(struct i2c_client *client)
 	sysfs_remove_groups(&rdev->dev.kobj, reg_groups);
 #endif
 
-	return 0;
 }
 
 #ifdef CONFIG_OF
@@ -350,7 +349,7 @@ static struct i2c_driver tps544_driver = {
 		.name = "tps544",
 		.of_match_table = of_match_ptr(tps544_of_match),
 	},
-	.probe_new = tps544_probe,
+	.probe = tps544_probe,
 	.remove = tps544_remove,
 	.id_table = tps544_id,
 };
@@ -359,4 +358,4 @@ module_i2c_driver(tps544_driver);
 
 MODULE_AUTHOR("Harini Katakam");
 MODULE_DESCRIPTION("PMBus regulator driver for TPS544");
-MODULE_LICENSE("GPL v2");
+MODULE_LICENSE("GPL");

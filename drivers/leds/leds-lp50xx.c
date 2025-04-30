@@ -266,7 +266,6 @@ struct lp50xx_led {
 	struct led_classdev_mc mc_cdev;
 	struct lp50xx *priv;
 	unsigned long bank_modules;
-	int led_intensity[LP50XX_LEDS_PER_MODULE];
 	u8 ctrl_bank_enabled;
 	int led_number;
 };
@@ -564,16 +563,14 @@ static int lp50xx_probe(struct i2c_client *client)
 	return lp50xx_probe_dt(led);
 }
 
-static int lp50xx_remove(struct i2c_client *client)
+static void lp50xx_remove(struct i2c_client *client)
 {
 	struct lp50xx *led = i2c_get_clientdata(client);
 	int ret;
 
 	ret = lp50xx_enable_disable(led, 0);
-	if (ret) {
+	if (ret)
 		dev_err(led->dev, "Failed to disable chip\n");
-		return ret;
-	}
 
 	if (led->regulator) {
 		ret = regulator_disable(led->regulator);
@@ -582,8 +579,6 @@ static int lp50xx_remove(struct i2c_client *client)
 	}
 
 	mutex_destroy(&led->lock);
-
-	return 0;
 }
 
 static const struct i2c_device_id lp50xx_id[] = {
@@ -613,7 +608,7 @@ static struct i2c_driver lp50xx_driver = {
 		.name	= "lp50xx",
 		.of_match_table = of_lp50xx_leds_match,
 	},
-	.probe_new	= lp50xx_probe,
+	.probe		= lp50xx_probe,
 	.remove		= lp50xx_remove,
 	.id_table	= lp50xx_id,
 };

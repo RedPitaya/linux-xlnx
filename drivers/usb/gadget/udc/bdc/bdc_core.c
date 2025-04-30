@@ -583,7 +583,7 @@ disable_clk:
 	return ret;
 }
 
-static int bdc_remove(struct platform_device *pdev)
+static void bdc_remove(struct platform_device *pdev)
 {
 	struct bdc *bdc;
 
@@ -593,7 +593,6 @@ static int bdc_remove(struct platform_device *pdev)
 	bdc_hw_exit(bdc);
 	bdc_phy_exit(bdc);
 	clk_disable_unprepare(bdc->clk);
-	return 0;
 }
 
 #ifdef CONFIG_PM_SLEEP
@@ -623,6 +622,7 @@ static int bdc_resume(struct device *dev)
 	ret = bdc_reinit(bdc);
 	if (ret) {
 		dev_err(bdc->dev, "err in bdc reinit\n");
+		clk_disable_unprepare(bdc->clk);
 		return ret;
 	}
 
@@ -647,7 +647,7 @@ static struct platform_driver bdc_driver = {
 		.of_match_table	= bdc_of_match,
 	},
 	.probe		= bdc_probe,
-	.remove		= bdc_remove,
+	.remove_new	= bdc_remove,
 };
 
 module_platform_driver(bdc_driver);

@@ -77,11 +77,11 @@ Side-channel attacks
 
 fscrypt is only resistant to side-channel attacks, such as timing or
 electromagnetic attacks, to the extent that the underlying Linux
-Cryptographic API algorithms are.  If a vulnerable algorithm is used,
-such as a table-based implementation of AES, it may be possible for an
-attacker to mount a side channel attack against the online system.
-Side channel attacks may also be mounted against applications
-consuming decrypted data.
+Cryptographic API algorithms or inline encryption hardware are.  If a
+vulnerable algorithm is used, such as a table-based implementation of
+AES, it may be possible for an attacker to mount a side channel attack
+against the online system.  Side channel attacks may also be mounted
+against applications consuming decrypted data.
 
 Unauthorized file access
 ~~~~~~~~~~~~~~~~~~~~~~~~
@@ -176,11 +176,11 @@ Master Keys
 
 Each encrypted directory tree is protected by a *master key*.  Master
 keys can be up to 64 bytes long, and must be at least as long as the
-greater of the key length needed by the contents and filenames
-encryption modes being used.  For example, if AES-256-XTS is used for
-contents encryption, the master key must be 64 bytes (512 bits).  Note
-that the XTS mode is defined to require a key twice as long as that
-required by the underlying block cipher.
+greater of the security strength of the contents and filenames
+encryption modes being used.  For example, if any AES-256 mode is
+used, the master key must be at least 256 bits, i.e. 32 bytes.  A
+stricter requirement applies if the key is used by a v1 encryption
+policy and AES-256-XTS is used; such keys must be 64 bytes.
 
 To "unlock" an encrypted directory tree, userspace must provide the
 appropriate master key.  There can be any number of master keys, each
@@ -332,35 +332,121 @@ Encryption modes and usage
 fscrypt allows one encryption mode to be specified for file contents
 and one encryption mode to be specified for filenames.  Different
 directory trees are permitted to use different encryption modes.
+
+Supported modes
+---------------
+
 Currently, the following pairs of encryption modes are supported:
 
 - AES-256-XTS for contents and AES-256-CTS-CBC for filenames
-- AES-128-CBC for contents and AES-128-CTS-CBC for filenames
+- AES-256-XTS for contents and AES-256-HCTR2 for filenames
 - Adiantum for both contents and filenames
+- AES-128-CBC-ESSIV for contents and AES-128-CTS-CBC for filenames
+- SM4-XTS for contents and SM4-CTS-CBC for filenames
 
-If unsure, you should use the (AES-256-XTS, AES-256-CTS-CBC) pair.
+Authenticated encryption modes are not currently supported because of
+the difficulty of dealing with ciphertext expansion.  Therefore,
+contents encryption uses a block cipher in `XTS mode
+<https://en.wikipedia.org/wiki/Disk_encryption_theory#XTS>`_ or
+`CBC-ESSIV mode
+<https://en.wikipedia.org/wiki/Disk_encryption_theory#Encrypted_salt-sector_initialization_vector_(ESSIV)>`_,
+or a wide-block cipher.  Filenames encryption uses a
+block cipher in `CTS-CBC mode
+<https://en.wikipedia.org/wiki/Ciphertext_stealing>`_ or a wide-block
+cipher.
 
-AES-128-CBC was added only for low-powered embedded devices with
-crypto accelerators such as CAAM or CESA that do not support XTS.  To
-use AES-128-CBC, CONFIG_CRYPTO_ESSIV and CONFIG_CRYPTO_SHA256 (or
-another SHA-256 implementation) must be enabled so that ESSIV can be
-used.
+The (AES-256-XTS, AES-256-CTS-CBC) pair is the recommended default.
+It is also the only option that is *guaranteed* to always be supported
+if the kernel supports fscrypt at all; see `Kernel config options`_.
 
-Adiantum is a (primarily) stream cipher-based mode that is fast even
-on CPUs without dedicated crypto instructions.  It's also a true
-wide-block mode, unlike XTS.  It can also eliminate the need to derive
-per-file encryption keys.  However, it depends on the security of two
-primitives, XChaCha12 and AES-256, rather than just one.  See the
-paper "Adiantum: length-preserving encryption for entry-level
-processors" (https://eprint.iacr.org/2018/720.pdf) for more details.
-To use Adiantum, CONFIG_CRYPTO_ADIANTUM must be enabled.  Also, fast
-implementations of ChaCha and NHPoly1305 should be enabled, e.g.
-CONFIG_CRYPTO_CHACHA20_NEON and CONFIG_CRYPTO_NHPOLY1305_NEON for ARM.
+The (AES-256-XTS, AES-256-HCTR2) pair is also a good choice that
+upgrades the filenames encryption to use a wide-block cipher.  (A
+*wide-block cipher*, also called a tweakable super-pseudorandom
+permutation, has the property that changing one bit scrambles the
+entire result.)  As described in `Filenames encryption`_, a wide-block
+cipher is the ideal mode for the problem domain, though CTS-CBC is the
+"least bad" choice among the alternatives.  For more information about
+HCTR2, see `the HCTR2 paper <https://eprint.iacr.org/2021/1441.pdf>`_.
 
-New encryption modes can be added relatively easily, without changes
-to individual filesystems.  However, authenticated encryption (AE)
-modes are not currently supported because of the difficulty of dealing
-with ciphertext expansion.
+Adiantum is recommended on systems where AES is too slow due to lack
+of hardware acceleration for AES.  Adiantum is a wide-block cipher
+that uses XChaCha12 and AES-256 as its underlying components.  Most of
+the work is done by XChaCha12, which is much faster than AES when AES
+acceleration is unavailable.  For more information about Adiantum, see
+`the Adiantum paper <https://eprint.iacr.org/2018/720.pdf>`_.
+
+The (AES-128-CBC-ESSIV, AES-128-CTS-CBC) pair exists only to support
+systems whose only form of AES acceleration is an off-CPU crypto
+accelerator such as CAAM or CESA that does not support XTS.
+
+The remaining mode pairs are the "national pride ciphers":
+
+- (SM4-XTS, SM4-CTS-CBC)
+
+Generally speaking, these ciphers aren't "bad" per se, but they
+receive limited security review compared to the usual choices such as
+AES and ChaCha.  They also don't bring much new to the table.  It is
+suggested to only use these ciphers where their use is mandated.
+
+Kernel config options
+---------------------
+
+Enabling fscrypt support (CONFIG_FS_ENCRYPTION) automatically pulls in
+only the basic support from the crypto API needed to use AES-256-XTS
+and AES-256-CTS-CBC encryption.  For optimal performance, it is
+strongly recommended to also enable any available platform-specific
+kconfig options that provide acceleration for the algorithm(s) you
+wish to use.  Support for any "non-default" encryption modes typically
+requires extra kconfig options as well.
+
+Below, some relevant options are listed by encryption mode.  Note,
+acceleration options not listed below may be available for your
+platform; refer to the kconfig menus.  File contents encryption can
+also be configured to use inline encryption hardware instead of the
+kernel crypto API (see `Inline encryption support`_); in that case,
+the file contents mode doesn't need to supported in the kernel crypto
+API, but the filenames mode still does.
+
+- AES-256-XTS and AES-256-CTS-CBC
+    - Recommended:
+        - arm64: CONFIG_CRYPTO_AES_ARM64_CE_BLK
+        - x86: CONFIG_CRYPTO_AES_NI_INTEL
+
+- AES-256-HCTR2
+    - Mandatory:
+        - CONFIG_CRYPTO_HCTR2
+    - Recommended:
+        - arm64: CONFIG_CRYPTO_AES_ARM64_CE_BLK
+        - arm64: CONFIG_CRYPTO_POLYVAL_ARM64_CE
+        - x86: CONFIG_CRYPTO_AES_NI_INTEL
+        - x86: CONFIG_CRYPTO_POLYVAL_CLMUL_NI
+
+- Adiantum
+    - Mandatory:
+        - CONFIG_CRYPTO_ADIANTUM
+    - Recommended:
+        - arm32: CONFIG_CRYPTO_CHACHA20_NEON
+        - arm32: CONFIG_CRYPTO_NHPOLY1305_NEON
+        - arm64: CONFIG_CRYPTO_CHACHA20_NEON
+        - arm64: CONFIG_CRYPTO_NHPOLY1305_NEON
+        - x86: CONFIG_CRYPTO_CHACHA20_X86_64
+        - x86: CONFIG_CRYPTO_NHPOLY1305_SSE2
+        - x86: CONFIG_CRYPTO_NHPOLY1305_AVX2
+
+- AES-128-CBC-ESSIV and AES-128-CTS-CBC:
+    - Mandatory:
+        - CONFIG_CRYPTO_ESSIV
+        - CONFIG_CRYPTO_SHA256 or another SHA-256 implementation
+    - Recommended:
+        - AES-CBC acceleration
+
+fscrypt also uses HMAC-SHA512 for key derivation, so enabling SHA-512
+acceleration is recommended:
+
+- SHA-512
+    - Recommended:
+        - arm64: CONFIG_CRYPTO_SHA512_ARM64_CE
+        - x86: CONFIG_CRYPTO_SHA512_SSSE3
 
 Contents encryption
 -------------------
@@ -404,11 +490,11 @@ alternatively has the file's nonce (for `DIRECT_KEY policies`_) or
 inode number (for `IV_INO_LBLK_64 policies`_) included in the IVs.
 Thus, IV reuse is limited to within a single directory.
 
-With CTS-CBC, the IV reuse means that when the plaintext filenames
-share a common prefix at least as long as the cipher block size (16
-bytes for AES), the corresponding encrypted filenames will also share
-a common prefix.  This is undesirable.  Adiantum does not have this
-weakness, as it is a wide-block encryption mode.
+With CTS-CBC, the IV reuse means that when the plaintext filenames share a
+common prefix at least as long as the cipher block size (16 bytes for AES), the
+corresponding encrypted filenames will also share a common prefix.  This is
+undesirable.  Adiantum and HCTR2 do not have this weakness, as they are
+wide-block encryption modes.
 
 All supported filenames encryption modes accept any plaintext length
 >= 16 bytes; cipher block alignment is not required.  However,
@@ -474,7 +560,14 @@ This structure must be initialized as follows:
   be set to constants from ``<linux/fscrypt.h>`` which identify the
   encryption modes to use.  If unsure, use FSCRYPT_MODE_AES_256_XTS
   (1) for ``contents_encryption_mode`` and FSCRYPT_MODE_AES_256_CTS
-  (4) for ``filenames_encryption_mode``.
+  (4) for ``filenames_encryption_mode``.  For details, see `Encryption
+  modes and usage`_.
+
+  v1 encryption policies only support three combinations of modes:
+  (FSCRYPT_MODE_AES_256_XTS, FSCRYPT_MODE_AES_256_CTS),
+  (FSCRYPT_MODE_AES_128_CBC, FSCRYPT_MODE_AES_128_CTS), and
+  (FSCRYPT_MODE_ADIANTUM, FSCRYPT_MODE_ADIANTUM).  v2 policies support
+  all combinations documented in `Supported modes`_.
 
 - ``flags`` contains optional flags from ``<linux/fscrypt.h>``:
 
@@ -1047,8 +1140,8 @@ astute users may notice some differences in behavior:
   may be used to overwrite the source files but isn't guaranteed to be
   effective on all filesystems and storage devices.
 
-- Direct I/O is not supported on encrypted files.  Attempts to use
-  direct I/O on such files will fall back to buffered I/O.
+- Direct I/O is supported on encrypted files only under some
+  circumstances.  For details, see `Direct I/O support`_.
 
 - The fallocate operations FALLOC_FL_COLLAPSE_RANGE and
   FALLOC_FL_INSERT_RANGE are not supported on encrypted files and will
@@ -1135,6 +1228,71 @@ where applications may later write sensitive data.  It is recommended
 that systems implementing a form of "verified boot" take advantage of
 this by validating all top-level encryption policies prior to access.
 
+Inline encryption support
+=========================
+
+By default, fscrypt uses the kernel crypto API for all cryptographic
+operations (other than HKDF, which fscrypt partially implements
+itself).  The kernel crypto API supports hardware crypto accelerators,
+but only ones that work in the traditional way where all inputs and
+outputs (e.g. plaintexts and ciphertexts) are in memory.  fscrypt can
+take advantage of such hardware, but the traditional acceleration
+model isn't particularly efficient and fscrypt hasn't been optimized
+for it.
+
+Instead, many newer systems (especially mobile SoCs) have *inline
+encryption hardware* that can encrypt/decrypt data while it is on its
+way to/from the storage device.  Linux supports inline encryption
+through a set of extensions to the block layer called *blk-crypto*.
+blk-crypto allows filesystems to attach encryption contexts to bios
+(I/O requests) to specify how the data will be encrypted or decrypted
+in-line.  For more information about blk-crypto, see
+:ref:`Documentation/block/inline-encryption.rst <inline_encryption>`.
+
+On supported filesystems (currently ext4 and f2fs), fscrypt can use
+blk-crypto instead of the kernel crypto API to encrypt/decrypt file
+contents.  To enable this, set CONFIG_FS_ENCRYPTION_INLINE_CRYPT=y in
+the kernel configuration, and specify the "inlinecrypt" mount option
+when mounting the filesystem.
+
+Note that the "inlinecrypt" mount option just specifies to use inline
+encryption when possible; it doesn't force its use.  fscrypt will
+still fall back to using the kernel crypto API on files where the
+inline encryption hardware doesn't have the needed crypto capabilities
+(e.g. support for the needed encryption algorithm and data unit size)
+and where blk-crypto-fallback is unusable.  (For blk-crypto-fallback
+to be usable, it must be enabled in the kernel configuration with
+CONFIG_BLK_INLINE_ENCRYPTION_FALLBACK=y.)
+
+Currently fscrypt always uses the filesystem block size (which is
+usually 4096 bytes) as the data unit size.  Therefore, it can only use
+inline encryption hardware that supports that data unit size.
+
+Inline encryption doesn't affect the ciphertext or other aspects of
+the on-disk format, so users may freely switch back and forth between
+using "inlinecrypt" and not using "inlinecrypt".
+
+Direct I/O support
+==================
+
+For direct I/O on an encrypted file to work, the following conditions
+must be met (in addition to the conditions for direct I/O on an
+unencrypted file):
+
+* The file must be using inline encryption.  Usually this means that
+  the filesystem must be mounted with ``-o inlinecrypt`` and inline
+  encryption hardware must be present.  However, a software fallback
+  is also available.  For details, see `Inline encryption support`_.
+
+* The I/O request must be fully aligned to the filesystem block size.
+  This means that the file position the I/O is targeting, the lengths
+  of all I/O segments, and the memory addresses of all I/O buffers
+  must be multiples of this value.  Note that the filesystem block
+  size may be greater than the logical block size of the block device.
+
+If either of the above conditions is not met, then direct I/O on the
+encrypted file will fall back to buffered I/O.
+
 Implementation details
 ======================
 
@@ -1184,10 +1342,17 @@ keys`_ and `DIRECT_KEY policies`_.
 Data path changes
 -----------------
 
-For the read path (->readpage()) of regular files, filesystems can
+When inline encryption is used, filesystems just need to associate
+encryption contexts with bios to specify how the block layer or the
+inline encryption hardware will encrypt/decrypt the file contents.
+
+When inline encryption isn't used, filesystems must encrypt/decrypt
+the file contents themselves, as described below:
+
+For the read path (->read_folio()) of regular files, filesystems can
 read the ciphertext into the page cache and decrypt it in-place.  The
-page lock must be held until decryption has finished, to prevent the
-page from becoming visible to userspace prematurely.
+folio lock must be held until decryption has finished, to prevent the
+folio from becoming visible to userspace prematurely.
 
 For the write path (->writepage()) of regular files, filesystems
 cannot encrypt data in-place in the page cache, since the cached
@@ -1196,18 +1361,6 @@ temporary buffer or "bounce page", then write out the temporary
 buffer.  Some filesystems, such as UBIFS, already use temporary
 buffers regardless of encryption.  Other filesystems, such as ext4 and
 F2FS, have to allocate bounce pages specially for encryption.
-
-Fscrypt is also able to use inline encryption hardware instead of the
-kernel crypto API for en/decryption of file contents.  When possible,
-and if directed to do so (by specifying the 'inlinecrypt' mount option
-for an ext4/F2FS filesystem), it adds encryption contexts to bios and
-uses blk-crypto to perform the en/decryption instead of making use of
-the above read/write path changes.  Of course, even if directed to
-make use of inline encryption, fscrypt will only be able to do so if
-either hardware inline encryption support is available for the
-selected encryption algorithm or CONFIG_BLK_INLINE_ENCRYPTION_FALLBACK
-is selected.  If neither is the case, fscrypt will fall back to using
-the above mentioned read/write path changes for en/decryption.
 
 Filename hashing and encoding
 -----------------------------

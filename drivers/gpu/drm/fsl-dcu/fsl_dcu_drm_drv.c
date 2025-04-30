@@ -20,10 +20,10 @@
 
 #include <drm/drm_atomic_helper.h>
 #include <drm/drm_drv.h>
-#include <drm/drm_fb_cma_helper.h>
-#include <drm/drm_fb_helper.h>
-#include <drm/drm_gem_cma_helper.h>
+#include <drm/drm_fbdev_dma.h>
+#include <drm/drm_gem_dma_helper.h>
 #include <drm/drm_modeset_helper.h>
+#include <drm/drm_module.h>
 #include <drm/drm_probe_helper.h>
 #include <drm/drm_vblank.h>
 
@@ -149,13 +149,13 @@ static void fsl_dcu_unload(struct drm_device *dev)
 	dev->dev_private = NULL;
 }
 
-DEFINE_DRM_GEM_CMA_FOPS(fsl_dcu_drm_fops);
+DEFINE_DRM_GEM_DMA_FOPS(fsl_dcu_drm_fops);
 
 static const struct drm_driver fsl_dcu_drm_driver = {
 	.driver_features	= DRIVER_GEM | DRIVER_MODESET | DRIVER_ATOMIC,
 	.load			= fsl_dcu_load,
 	.unload			= fsl_dcu_unload,
-	DRM_GEM_CMA_DRIVER_OPS,
+	DRM_GEM_DMA_DRIVER_OPS,
 	.fops			= &fsl_dcu_drm_fops,
 	.name			= "fsl-dcu-drm",
 	.desc			= "Freescale DCU DRM",
@@ -333,7 +333,7 @@ static int fsl_dcu_drm_probe(struct platform_device *pdev)
 	if (ret < 0)
 		goto put;
 
-	drm_fbdev_generic_setup(drm, legacyfb_depth);
+	drm_fbdev_dma_setup(drm, legacyfb_depth);
 
 	return 0;
 
@@ -346,7 +346,7 @@ disable_clk:
 	return ret;
 }
 
-static int fsl_dcu_drm_remove(struct platform_device *pdev)
+static void fsl_dcu_drm_remove(struct platform_device *pdev)
 {
 	struct fsl_dcu_drm_device *fsl_dev = platform_get_drvdata(pdev);
 
@@ -354,13 +354,11 @@ static int fsl_dcu_drm_remove(struct platform_device *pdev)
 	drm_dev_put(fsl_dev->drm);
 	clk_disable_unprepare(fsl_dev->clk);
 	clk_unregister(fsl_dev->pix_clk);
-
-	return 0;
 }
 
 static struct platform_driver fsl_dcu_drm_platform_driver = {
 	.probe		= fsl_dcu_drm_probe,
-	.remove		= fsl_dcu_drm_remove,
+	.remove_new	= fsl_dcu_drm_remove,
 	.driver		= {
 		.name	= "fsl-dcu",
 		.pm	= &fsl_dcu_drm_pm_ops,
@@ -368,7 +366,7 @@ static struct platform_driver fsl_dcu_drm_platform_driver = {
 	},
 };
 
-module_platform_driver(fsl_dcu_drm_platform_driver);
+drm_module_platform_driver(fsl_dcu_drm_platform_driver);
 
 MODULE_DESCRIPTION("Freescale DCU DRM Driver");
 MODULE_LICENSE("GPL");

@@ -27,7 +27,8 @@
 #include "color.h"
 #include "sample-raw.h"
 #include "s390-cpumcf-kernel.h"
-#include "pmu-events/pmu-events.h"
+#include "util/pmu.h"
+#include "util/sample.h"
 
 static size_t ctrset_size(struct cf_ctrset_entry *set)
 {
@@ -129,40 +130,60 @@ static int get_counterset_start(int setnr)
 	}
 }
 
-/* Scan the PMU table and extract the logical name of a counter from the
- * PMU events table. Input is the counter set and counter number with in the
- * set. Construct the event number and use this as key. If they match return
- * the name of this counter.
- * If no match is found a NULL pointer is returned.
- */
-static const char *get_counter_name(int set, int nr, struct pmu_events_map *map)
+struct get_counter_name_data {
+	int wanted;
+	char *result;
+};
+
+static int get_counter_name_callback(void *vdata, struct pmu_event_info *info)
 {
-	int rc, event_nr, wanted = get_counterset_start(set) + nr;
+	struct get_counter_name_data *data = vdata;
+	int rc, event_nr;
+	const char *event_str;
 
-	if (map) {
-		struct pmu_event *evp = map->table;
+	if (info->str == NULL)
+		return 0;
 
-		for (; evp->name || evp->event || evp->desc; ++evp) {
-			if (evp->name == NULL || evp->event == NULL)
-				continue;
-			rc = sscanf(evp->event, "event=%x", &event_nr);
-			if (rc == 1 && event_nr == wanted)
-				return evp->name;
-		}
+	event_str = strstr(info->str, "event=");
+	if (!event_str)
+		return 0;
+
+	rc = sscanf(event_str, "event=%x", &event_nr);
+	if (rc == 1 && event_nr == data->wanted) {
+		data->result = strdup(info->name);
+		return 1; /* Terminate the search. */
 	}
-	return NULL;
+	return 0;
 }
 
-static void s390_cpumcfdg_dump(struct perf_sample *sample)
+/* Scan the PMU and extract the logical name of a counter from the event. Input
+ * is the counter set and counter number with in the set. Construct the event
+ * number and use this as key. If they match return the name of this counter.
+ * If no match is found a NULL pointer is returned.
+ */
+static char *get_counter_name(int set, int nr, struct perf_pmu *pmu)
+{
+	struct get_counter_name_data data = {
+		.wanted = get_counterset_start(set) + nr,
+		.result = NULL,
+	};
+
+	if (!pmu)
+		return NULL;
+
+	perf_pmu__for_each_event(pmu, /*skip_duplicate_pmus=*/ true,
+				 &data, get_counter_name_callback);
+	return data.result;
+}
+
+static void s390_cpumcfdg_dump(struct perf_pmu *pmu, struct perf_sample *sample)
 {
 	size_t i, len = sample->raw_size, offset = 0;
 	unsigned char *buf = sample->raw_data;
 	const char *color = PERF_COLOR_BLUE;
 	struct cf_ctrset_entry *cep, ce;
-	struct pmu_events_map *map;
 	u64 *p;
 
-	map = pmu_events_map__find();
 	while (offset < len) {
 		cep = (struct cf_ctrset_entry *)(buf + offset);
 
@@ -180,11 +201,12 @@ static void s390_cpumcfdg_dump(struct perf_sample *sample)
 		color_fprintf(stdout, color, "    [%#08zx] Counterset:%d"
 			      " Counters:%d\n", offset, ce.set, ce.ctr);
 		for (i = 0, p = (u64 *)(cep + 1); i < ce.ctr; ++i, ++p) {
-			const char *ev_name = get_counter_name(ce.set, i, map);
+			char *ev_name = get_counter_name(ce.set, i, pmu);
 
 			color_fprintf(stdout, color,
 				      "\tCounter:%03d %s Value:%#018lx\n", i,
 				      ev_name ?: "<unknown>", be64_to_cpu(*p));
+			free(ev_name);
 		}
 		offset += ctrset_size(&ce);
 	}
@@ -197,14 +219,14 @@ static void s390_cpumcfdg_dump(struct perf_sample *sample)
  */
 void evlist__s390_sample_raw(struct evlist *evlist, union perf_event *event, struct perf_sample *sample)
 {
-	struct evsel *ev_bc000;
+	struct evsel *evsel;
 
 	if (event->header.type != PERF_RECORD_SAMPLE)
 		return;
 
-	ev_bc000 = evlist__event2evsel(evlist, event);
-	if (ev_bc000 == NULL ||
-	    ev_bc000->core.attr.config != PERF_EVENT_CPUM_CF_DIAG)
+	evsel = evlist__event2evsel(evlist, event);
+	if (evsel == NULL ||
+	    evsel->core.attr.config != PERF_EVENT_CPUM_CF_DIAG)
 		return;
 
 	/* Display raw data on screen */
@@ -212,5 +234,5 @@ void evlist__s390_sample_raw(struct evlist *evlist, union perf_event *event, str
 		pr_err("Invalid counter set data encountered\n");
 		return;
 	}
-	s390_cpumcfdg_dump(sample);
+	s390_cpumcfdg_dump(evsel->pmu, sample);
 }

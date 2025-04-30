@@ -17,12 +17,14 @@
 
 #include <pthread.h>
 #include "futextest.h"
+#include "futex2test.h"
 #include "logging.h"
 
 #define TEST_NAME "futex-wait-timeout"
 
 static long timeout_ns = 100000;	/* 100us default timeout */
 static futex_t futex_pi;
+static pthread_barrier_t barrier;
 
 void usage(char *prog)
 {
@@ -46,6 +48,8 @@ void *get_pi_lock(void *arg)
 	ret = futex_lock_pi(&futex_pi, NULL, 0, 0);
 	if (ret != 0)
 		error("futex_lock_pi failed\n", ret);
+
+	pthread_barrier_wait(&barrier);
 
 	/* Blocks forever */
 	ret = futex_wait(&lock, 0, NULL, 0);
@@ -96,6 +100,12 @@ int main(int argc, char *argv[])
 	struct timespec to;
 	pthread_t thread;
 	int c;
+	struct futex_waitv waitv = {
+			.uaddr = (uintptr_t)&f1,
+			.val = f1,
+			.flags = FUTEX_32,
+			.__reserved = 0
+		};
 
 	while ((c = getopt(argc, argv, "cht:v:")) != -1) {
 		switch (c) {
@@ -118,11 +128,12 @@ int main(int argc, char *argv[])
 	}
 
 	ksft_print_header();
-	ksft_set_plan(7);
+	ksft_set_plan(9);
 	ksft_print_msg("%s: Block on a futex and wait for timeout\n",
 	       basename(argv[0]));
 	ksft_print_msg("\tArguments: timeout=%ldns\n", timeout_ns);
 
+	pthread_barrier_init(&barrier, NULL, 2);
 	pthread_create(&thread, NULL, get_pi_lock, NULL);
 
 	/* initialize relative timeout */
@@ -156,6 +167,9 @@ int main(int argc, char *argv[])
 	res = futex_wait_requeue_pi(&f1, f1, &futex_pi, &to, 0);
 	test_timeout(res, &ret, "futex_wait_requeue_pi monotonic", ETIMEDOUT);
 
+	/* Wait until the other thread calls futex_lock_pi() */
+	pthread_barrier_wait(&barrier);
+	pthread_barrier_destroy(&barrier);
 	/*
 	 * FUTEX_LOCK_PI with CLOCK_REALTIME
 	 * Due to historical reasons, FUTEX_LOCK_PI supports only realtime
@@ -174,6 +188,18 @@ int main(int argc, char *argv[])
 	/* Test operations that don't support FUTEX_CLOCK_REALTIME */
 	res = futex_lock_pi(&futex_pi, NULL, 0, FUTEX_CLOCK_REALTIME);
 	test_timeout(res, &ret, "futex_lock_pi invalid timeout flag", ENOSYS);
+
+	/* futex_waitv with CLOCK_MONOTONIC */
+	if (futex_get_abs_timeout(CLOCK_MONOTONIC, &to, timeout_ns))
+		return RET_FAIL;
+	res = futex_waitv(&waitv, 1, 0, &to, CLOCK_MONOTONIC);
+	test_timeout(res, &ret, "futex_waitv monotonic", ETIMEDOUT);
+
+	/* futex_waitv with CLOCK_REALTIME */
+	if (futex_get_abs_timeout(CLOCK_REALTIME, &to, timeout_ns))
+		return RET_FAIL;
+	res = futex_waitv(&waitv, 1, 0, &to, CLOCK_REALTIME);
+	test_timeout(res, &ret, "futex_waitv realtime", ETIMEDOUT);
 
 	ksft_print_cnts();
 	return ret;

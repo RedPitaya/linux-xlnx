@@ -206,6 +206,28 @@ struct phy_configure_opts_hdmi {
 	 * Flag to reset the GT
 	 */
 	u8 reset_gt : 1;
+	/**
+	 * @get_samplerate:
+	 *
+	 * Flag to get the samplerate value from the PHY driver
+	 *
+	 * Allowed values: 0, 1
+	 */
+	u8 get_samplerate : 1;
+	/**
+	 * @samplerate:
+	 *
+	 * samplerate value.
+	 *
+	 * Allowed values: 1, 2, 3, 5
+	 */
+	u8 samplerate;
+	/**
+	 * @resetgtpll
+	 * Flag to reset gtpll from PHY driver
+	 * Allowed values : 0, 1
+	 */
+	u8 resetgtpll : 1;
 };
 
 #endif /* __PHY_HDMI_H_ */

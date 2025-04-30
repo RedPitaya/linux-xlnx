@@ -46,6 +46,9 @@ int tsn_data_path_open(struct net_device *ndev)
 {
 	int ret, i = 0;
 	struct axienet_local *lp = netdev_priv(ndev);
+	struct net_device *emac0_ndev;
+	struct net_device *emac1_ndev;
+	u8 hw_addr_mask[ETH_ALEN];
 	struct axienet_dma_q *q;
 
 	static char irq_name[XAE_MAX_QUEUES + XAE_TSN_MIN_QUEUES][24];
@@ -93,6 +96,22 @@ int tsn_data_path_open(struct net_device *ndev)
 	if (ret)
 		goto err_tadma;
 #endif
+	if (lp->slaves[0] && lp->slaves[1]) {
+		emac0_ndev = lp->slaves[0];
+		emac1_ndev = lp->slaves[1];
+
+		for (i = 0; i < ETH_ALEN; i++)
+			hw_addr_mask[i] = 0xFF;
+		hw_addr_mask[5] &= 0x000000F0;
+		if (!ether_addr_equal_masked(emac0_ndev->dev_addr, emac1_ndev->dev_addr,
+					     hw_addr_mask))
+			netdev_warn(ndev,
+				    "MSB 44 bits of the MAC addresses of TSN EMAC0 and TSN EMAC1 are different");
+		if (!ether_addr_equal_masked(emac0_ndev->dev_addr, ndev->dev_addr, hw_addr_mask))
+			netdev_warn(ndev, "MSB 44 bits of the MAC addresses of TSN EMAC0 and TSN EP are different");
+		if (!ether_addr_equal_masked(emac0_ndev->dev_addr, ndev->dev_addr, hw_addr_mask))
+			netdev_warn(ndev, "MSB 44 bits of the MAC addresses of TSN EMAC1 and TSN EP are different");
+	}
 
 	netif_tx_start_all_queues(ndev);
 	return 0;
@@ -279,8 +298,8 @@ static int tsn_ep_xmit(struct sk_buff *skb, struct net_device *ndev)
 static void tsn_ep_set_mac_address(struct net_device *ndev, const void *address)
 {
 	if (address)
-		ether_addr_copy(ndev->dev_addr, address);
-	if (!is_valid_ether_addr(ndev->dev_addr))
+		eth_hw_addr_set(ndev, address);
+	if (!address || !is_valid_ether_addr(ndev->dev_addr))
 		eth_hw_addr_random(ndev);
 }
 
@@ -341,7 +360,13 @@ static const struct net_device_ops ep_netdev_ops = {
 #if defined(CONFIG_XILINX_TSN_SWITCH)
 	.ndo_get_port_parent_id = tsn_switch_get_port_parent_id,
 #endif
+	.ndo_setup_tc = axienet_tsn_shaper_tc,
 };
+
+bool xlnx_is_port_ep_netdev(const struct net_device *ndev)
+{
+	return ndev && (ndev->netdev_ops == &ep_netdev_ops);
+}
 
 static const struct of_device_id tsn_ep_of_match[] = {
 	{ .compatible = "xlnx,tsn-ep"},
@@ -492,6 +517,7 @@ static int tsn_ep_probe(struct platform_device *pdev)
 	u16 num_queues = XAE_MAX_QUEUES;
 	u16 num_tc = 0;
 	struct device_node *np;
+	u8 mac_addr[ETH_ALEN];
 	char irq_name[32];
 
 	ndev = alloc_netdev_mq(sizeof(*lp), "ep",
@@ -552,14 +578,10 @@ static int tsn_ep_probe(struct platform_device *pdev)
 						 "xlnx,eth-hasnobuf");
 
 	/* Retrieve the MAC address */
-	ret = of_get_mac_address(pdev->dev.of_node, ndev->dev_addr);
-	if (ret) {
+	ret = of_get_mac_address(pdev->dev.of_node, mac_addr);
+	if (ret)
 		dev_err(&pdev->dev, "could not find MAC address\n");
-		goto free_netdev;
-	}
-	if (!is_valid_ether_addr(ndev->dev_addr))
-		eth_hw_addr_random(ndev);
-
+	tsn_ep_set_mac_address(ndev, mac_addr);
 	ret = tsn_mcdma_probe(pdev, lp, ndev);
 	if (ret) {
 		dev_err(&pdev->dev, "Getting MCDMA resource failed\n");
@@ -636,4 +658,4 @@ module_platform_driver(tsn_ep_driver);
 
 MODULE_DESCRIPTION("Xilinx Axi Ethernet driver");
 MODULE_AUTHOR("Xilinx");
-MODULE_LICENSE("GPL v2");
+MODULE_LICENSE("GPL");

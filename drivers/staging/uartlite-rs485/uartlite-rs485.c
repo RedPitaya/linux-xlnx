@@ -296,7 +296,7 @@ static void ulite_shutdown(struct uart_port *port)
 }
 
 static void ulite_set_termios(struct uart_port *port, struct ktermios *termios,
-			      struct ktermios *old)
+			      const struct ktermios *old)
 {
 	unsigned long flags;
 	unsigned int baud;
@@ -398,6 +398,7 @@ static void ulite_pm(struct uart_port *port, unsigned int state,
 }
 
 static int ulite_config_rs485(struct uart_port *port,
+			      struct ktermios *termios,
 			      struct serial_rs485 *rs485conf)
 {
 	port->rs485 = *rs485conf;
@@ -516,15 +517,14 @@ static int ulite_assign(struct device *dev, int id, phys_addr_t base, int irq,
 static int ulite_release(struct device *dev)
 {
 	struct uart_port *port = dev_get_drvdata(dev);
-	int rc = 0;
 
 	if (port) {
-		rc = uart_remove_one_port(&ulite_uart_driver, port);
+		uart_remove_one_port(&ulite_uart_driver, port);
 		dev_set_drvdata(dev, NULL);
 		port->mapbase = 0;
 	}
 
-	return rc;
+	return 0;
 }
 
 /**

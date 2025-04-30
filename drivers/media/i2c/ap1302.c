@@ -20,6 +20,7 @@
 #include <linux/mutex.h>
 #include <linux/regmap.h>
 #include <linux/regulator/consumer.h>
+#include <linux/bits.h>
 
 #include <media/media-entity.h>
 #include <media/v4l2-ctrls.h>
@@ -243,6 +244,7 @@
 #define AP1302_WARNING(n)			AP1302_REG_16BIT(0x6004 + (n) * 2)
 #define AP1302_SENSOR_SELECT			AP1302_REG_16BIT(0x600c)
 #define AP1302_SENSOR_SELECT_TP_MODE(n)		((n) << 8)
+#define AP1302_SENSOR_SELECT_TP_MODE_MASK	GENMASK(11, 8)
 #define AP1302_SENSOR_SELECT_PATTERN_ON		BIT(7)
 #define AP1302_SENSOR_SELECT_MODE_3D_ON		BIT(6)
 #define AP1302_SENSOR_SELECT_CLOCK		BIT(5)
@@ -250,6 +252,7 @@
 #define AP1302_SENSOR_SELECT_YUV		BIT(2)
 #define AP1302_SENSOR_SELECT_SENSOR_TP		(0U << 0)
 #define AP1302_SENSOR_SELECT_SENSOR(n)		(((n) + 1) << 0)
+#define AP1302_SENSOR_SELECT_SENSOR_MASK	GENMASK(1, 0)
 #define AP1302_SYS_START			AP1302_REG_16BIT(0x601a)
 #define AP1302_SYS_START_PLL_LOCK		BIT(15)
 #define AP1302_SYS_START_LOAD_OTP		BIT(12)
@@ -637,10 +640,10 @@ static int __ap1302_read(struct ap1302_device *ap1302, u32 reg, u32 *val)
 static int ap1302_read(struct ap1302_device *ap1302, u32 reg, u32 *val)
 {
 	u32 page = AP1302_REG_PAGE(reg);
-	int ret;
 
 	if (page) {
 		if (ap1302->reg_page != page) {
+			int ret;
 			ret = __ap1302_write(ap1302, AP1302_ADVANCED_BASE,
 					     page);
 			if (ret < 0)
@@ -1034,7 +1037,6 @@ static int ap1302_power_on_sensors(struct ap1302_device *ap1302)
 
 	for (i = 0; i < ARRAY_SIZE(ap1302->sensors); ++i) {
 		sensor = &ap1302->sensors[i];
-		ret = 0;
 
 		for (j = 0; j < sensor->num_supplies; ++j) {
 			unsigned int delay;
@@ -1239,12 +1241,14 @@ static int ap1302_stall(struct ap1302_device *ap1302, bool stall)
 		ap1302->streaming = false;
 		return 0;
 	} else {
+		ap1302_write(ap1302, AP1302_SYS_START, AP1302_SYS_START_PLL_LOCK |
+				AP1302_SYS_START_STALL_STATUS |	AP1302_SYS_START_STALL_EN |
+				AP1302_SYS_START_STALL_MODE_DISABLED, &ret);
+		if (ret < 0)
+			return ret;
+
 		ap1302->streaming = true;
-		return ap1302_write(ap1302, AP1302_SYS_START,
-				    AP1302_SYS_START_PLL_LOCK |
-				    AP1302_SYS_START_STALL_STATUS |
-				    AP1302_SYS_START_STALL_EN |
-				    AP1302_SYS_START_STALL_MODE_DISABLED, NULL);
+		return 0;
 	}
 }
 
@@ -1422,6 +1426,72 @@ static int ap1302_set_flicker_freq(struct ap1302_device *ap1302, s32 val)
 			    ap1302_flicker_values[val], NULL);
 }
 
+enum {
+	AP1302_TP_MODE_DISABLED = 0,
+	AP1302_TP_MODE_FLAT_COLOR,
+	AP1302_TP_MODE_PSEUDO_RANDOM,
+	AP1302_TP_MODE_COLOR_BARS,
+	AP1302_TP_MODE_GREY_BARS,
+	AP1302_TP_MODE_PRBS1,
+	AP1302_TP_MODE_PRBS2,
+	AP1302_TP_MODE_PRBS3,
+	AP1302_TP_MODE_PRBS4,
+	AP1302_TP_MODE_V_STRIPES,
+	AP1302_TP_MODE_V_RAMP,
+	AP1302_TP_MODE_WALKING_ONES_10B,
+	AP1302_TP_MODE_WALKING_ONES_8B,
+	AP1302_TP_MODE_BW,
+};
+
+static const char * const tp_qmenu[] = {
+	"Disabled",
+	"Flat Color",
+	"Pseudo Random (Noise)",
+	"100% Color Bars",
+	"Fade to Grey Bars",
+	"PRBS1",
+	"PRBS2",
+	"PRBS3",
+	"PRBS4",
+	"Vertical Stripes",
+	"Vertical Ramp",
+	"Walking 1's (10bit)",
+	"Walking 1's (8bit)",
+	"Black and White",
+};
+
+static int ap1302_set_test_pattern(struct ap1302_device *ap1302, s32 pat)
+{
+	u32 val;
+	int ret;
+
+	ret = ap1302_read(ap1302, AP1302_SENSOR_SELECT, &val);
+	if (ret)
+		return ret;
+
+	if (pat == AP1302_TP_MODE_DISABLED) {
+		val &= ~AP1302_SENSOR_SELECT_SENSOR_MASK;
+		/* The sensor field in the sensor select register defaults to primary
+		 * sensor (0x1). Therefore, when disabling test pattern mode, restore
+		 * the value by setting it to the primary sensor
+		 */
+		val |= AP1302_SENSOR_SELECT_SENSOR(0);
+		val &= ~AP1302_SENSOR_SELECT_PATTERN_ON;
+		val &= ~AP1302_SENSOR_SELECT_TP_MODE_MASK;
+		val |= AP1302_SENSOR_SELECT_TP_MODE(pat);
+	} else if (pat >= AP1302_TP_MODE_FLAT_COLOR && pat <= AP1302_TP_MODE_BW) {
+		val &= ~AP1302_SENSOR_SELECT_SENSOR_MASK;
+		val |= AP1302_SENSOR_SELECT_SENSOR_TP;
+		val |= AP1302_SENSOR_SELECT_PATTERN_ON;
+		val &= ~AP1302_SENSOR_SELECT_TP_MODE_MASK;
+		val |= AP1302_SENSOR_SELECT_TP_MODE(pat);
+	} else {
+		return -EINVAL;
+	}
+
+	return ap1302_write(ap1302, AP1302_SENSOR_SELECT, val, NULL);
+}
+
 static int ap1302_s_ctrl(struct v4l2_ctrl *ctrl)
 {
 	struct ap1302_device *ap1302 =
@@ -1463,6 +1533,9 @@ static int ap1302_s_ctrl(struct v4l2_ctrl *ctrl)
 
 	case V4L2_CID_POWER_LINE_FREQUENCY:
 		return ap1302_set_flicker_freq(ap1302, ctrl->val);
+
+	case V4L2_CID_TEST_PATTERN:
+		return ap1302_set_test_pattern(ap1302, ctrl->val);
 
 	default:
 		return -EINVAL;
@@ -1570,6 +1643,13 @@ static const struct v4l2_ctrl_config ap1302_ctrls[] = {
 		.min = 0,
 		.max = 3,
 		.def = 3,
+	}, {
+		.ops = &ap1302_ctrl_ops,
+		.id = V4L2_CID_TEST_PATTERN,
+		.min = 0,
+		.max = (ARRAY_SIZE(tp_qmenu) - 1),
+		.def = 0,
+		.qmenu = tp_qmenu,
 	},
 };
 
@@ -1686,7 +1766,6 @@ static int ap1302_enum_frame_size(struct v4l2_subdev *sd,
 				  struct v4l2_subdev_frame_size_enum *fse)
 {
 	struct ap1302_device *ap1302 = to_ap1302(sd);
-	unsigned int i;
 
 	if (fse->index)
 		return -EINVAL;
@@ -1704,6 +1783,7 @@ static int ap1302_enum_frame_size(struct v4l2_subdev *sd,
 		fse->max_width = ap1302->sensor_info->resolution.width;
 		fse->max_height = ap1302->sensor_info->resolution.height;
 	} else {
+		unsigned int i;
 		/*
 		 * On the source pad, the AP1302 can freely scale within the
 		 * scaler's limits.
@@ -1822,7 +1902,7 @@ static int ap1302_get_selection(struct v4l2_subdev *sd,
 static int ap1302_s_stream(struct v4l2_subdev *sd, int enable)
 {
 	struct ap1302_device *ap1302 = to_ap1302(sd);
-	int ret;
+	int ret = 0;
 
 	mutex_lock(&ap1302->lock);
 
@@ -2665,9 +2745,7 @@ static int ap1302_config_v4l2(struct ap1302_device *ap1302)
 	for (i = 0; i < ARRAY_SIZE(ap1302->formats); ++i)
 		ap1302->formats[i].info = &supported_video_formats[0];
 
-	ret = ap1302_init_cfg(sd, NULL);
-	if (ret < 0)
-		goto error_media;
+	ap1302_init_cfg(sd, NULL);
 
 	ret = ap1302_ctrls_init(ap1302);
 	if (ret < 0)
@@ -2809,7 +2887,7 @@ static void ap1302_cleanup(struct ap1302_device *ap1302)
 	mutex_destroy(&ap1302->lock);
 }
 
-static int ap1302_probe(struct i2c_client *client, const struct i2c_device_id *id)
+static int ap1302_probe(struct i2c_client *client)
 {
 	struct ap1302_device *ap1302;
 	unsigned int i;
@@ -2874,7 +2952,7 @@ error:
 	return ret;
 }
 
-static int ap1302_remove(struct i2c_client *client)
+static void ap1302_remove(struct i2c_client *client)
 {
 	struct v4l2_subdev *sd = i2c_get_clientdata(client);
 	struct ap1302_device *ap1302 = to_ap1302(sd);
@@ -2891,8 +2969,6 @@ static int ap1302_remove(struct i2c_client *client)
 	ap1302_ctrls_cleanup(ap1302);
 
 	ap1302_cleanup(ap1302);
-
-	return 0;
 }
 
 static const struct of_device_id ap1302_of_id_table[] = {

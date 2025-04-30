@@ -10,13 +10,14 @@
 #include "xfs_trans_resv.h"
 #include "xfs_mount.h"
 #include "xfs_inode.h"
+#include "xfs_da_format.h"
+#include "xfs_da_btree.h"
 #include "xfs_attr.h"
 #include "xfs_trace.h"
 #include "xfs_error.h"
 #include "xfs_acl.h"
-#include "xfs_da_format.h"
-#include "xfs_da_btree.h"
 #include "xfs_trans.h"
+#include "xfs_xattr.h"
 
 #include <linux/posix_acl_xattr.h>
 
@@ -202,7 +203,7 @@ __xfs_set_acl(struct inode *inode, struct posix_acl *acl, int type)
 		xfs_acl_to_disk(args.value, acl);
 	}
 
-	error = xfs_attr_set(&args);
+	error = xfs_attr_change(&args);
 	kmem_free(args.value);
 
 	/*
@@ -232,7 +233,7 @@ xfs_acl_set_mode(
 	xfs_ilock(ip, XFS_ILOCK_EXCL);
 	xfs_trans_ijoin(tp, ip, XFS_ILOCK_EXCL);
 	inode->i_mode = mode;
-	inode->i_ctime = current_time(inode);
+	inode_set_ctime_current(inode);
 	xfs_trans_log_inode(tp, ip, XFS_ILOG_CORE);
 
 	if (xfs_has_wsync(mp))
@@ -241,12 +242,13 @@ xfs_acl_set_mode(
 }
 
 int
-xfs_set_acl(struct user_namespace *mnt_userns, struct inode *inode,
+xfs_set_acl(struct mnt_idmap *idmap, struct dentry *dentry,
 	    struct posix_acl *acl, int type)
 {
 	umode_t mode;
 	bool set_mode = false;
 	int error = 0;
+	struct inode *inode = d_inode(dentry);
 
 	if (!acl)
 		goto set_acl;
@@ -256,7 +258,7 @@ xfs_set_acl(struct user_namespace *mnt_userns, struct inode *inode,
 		return error;
 
 	if (type == ACL_TYPE_ACCESS) {
-		error = posix_acl_update_mode(mnt_userns, inode, &mode, &acl);
+		error = posix_acl_update_mode(idmap, inode, &mode, &acl);
 		if (error)
 			return error;
 		set_mode = true;

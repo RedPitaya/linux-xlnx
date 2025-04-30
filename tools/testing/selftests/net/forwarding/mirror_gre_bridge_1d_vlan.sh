@@ -35,7 +35,8 @@ setup_prepare()
 	vrf_prepare
 	mirror_gre_topo_create
 
-	ip link add name br2 type bridge vlan_filtering 0
+	ip link add name br2 address $(mac_get $swp3) \
+		type bridge vlan_filtering 0
 	ip link set dev br2 up
 
 	vlan_create $swp3 555
@@ -80,7 +81,7 @@ test_gretap()
 
 test_ip6gretap()
 {
-	test_vlan_match gt6 'skip_hw vlan_id 555 vlan_ethtype ip' \
+	test_vlan_match gt6 'skip_hw vlan_id 555 vlan_ethtype ipv6' \
 			"mirror to ip6gretap"
 }
 

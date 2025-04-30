@@ -125,7 +125,7 @@ struct inode *ocfs2_iget(struct ocfs2_super *osb, u64 blkno, unsigned flags,
 	struct inode *inode = NULL;
 	struct super_block *sb = osb->sb;
 	struct ocfs2_find_inode_args args;
-	journal_t *journal = OCFS2_SB(sb)->journal->j_journal;
+	journal_t *journal = osb->journal->j_journal;
 
 	trace_ocfs2_iget_begin((unsigned long long)blkno, flags,
 			       sysfile_type);
@@ -306,8 +306,8 @@ void ocfs2_populate_inode(struct inode *inode, struct ocfs2_dinode *fe,
 	inode->i_atime.tv_nsec = le32_to_cpu(fe->i_atime_nsec);
 	inode->i_mtime.tv_sec = le64_to_cpu(fe->i_mtime);
 	inode->i_mtime.tv_nsec = le32_to_cpu(fe->i_mtime_nsec);
-	inode->i_ctime.tv_sec = le64_to_cpu(fe->i_ctime);
-	inode->i_ctime.tv_nsec = le32_to_cpu(fe->i_ctime_nsec);
+	inode_set_ctime(inode, le64_to_cpu(fe->i_ctime),
+		        le32_to_cpu(fe->i_ctime_nsec));
 
 	if (OCFS2_I(inode)->ip_blkno != le64_to_cpu(fe->i_blkno))
 		mlog(ML_ERROR,
@@ -713,7 +713,7 @@ bail:
 /*
  * Serialize with orphan dir recovery. If the process doing
  * recovery on this orphan dir does an iget() with the dir
- * i_mutex held, we'll deadlock here. Instead we detect this
+ * i_rwsem held, we'll deadlock here. Instead we detect this
  * and exit early - recovery will wipe this inode for us.
  */
 static int ocfs2_check_orphan_recovery_state(struct ocfs2_super *osb,
@@ -1314,8 +1314,8 @@ int ocfs2_mark_inode_dirty(handle_t *handle,
 	fe->i_mode = cpu_to_le16(inode->i_mode);
 	fe->i_atime = cpu_to_le64(inode->i_atime.tv_sec);
 	fe->i_atime_nsec = cpu_to_le32(inode->i_atime.tv_nsec);
-	fe->i_ctime = cpu_to_le64(inode->i_ctime.tv_sec);
-	fe->i_ctime_nsec = cpu_to_le32(inode->i_ctime.tv_nsec);
+	fe->i_ctime = cpu_to_le64(inode_get_ctime(inode).tv_sec);
+	fe->i_ctime_nsec = cpu_to_le32(inode_get_ctime(inode).tv_nsec);
 	fe->i_mtime = cpu_to_le64(inode->i_mtime.tv_sec);
 	fe->i_mtime_nsec = cpu_to_le32(inode->i_mtime.tv_nsec);
 
@@ -1352,8 +1352,8 @@ void ocfs2_refresh_inode(struct inode *inode,
 	inode->i_atime.tv_nsec = le32_to_cpu(fe->i_atime_nsec);
 	inode->i_mtime.tv_sec = le64_to_cpu(fe->i_mtime);
 	inode->i_mtime.tv_nsec = le32_to_cpu(fe->i_mtime_nsec);
-	inode->i_ctime.tv_sec = le64_to_cpu(fe->i_ctime);
-	inode->i_ctime.tv_nsec = le32_to_cpu(fe->i_ctime_nsec);
+	inode_set_ctime(inode, le64_to_cpu(fe->i_ctime),
+			le32_to_cpu(fe->i_ctime_nsec));
 
 	spin_unlock(&OCFS2_I(inode)->ip_lock);
 }

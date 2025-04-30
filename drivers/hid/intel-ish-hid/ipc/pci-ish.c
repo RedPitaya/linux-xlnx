@@ -41,6 +41,10 @@ static const struct pci_device_id ish_pci_tbl[] = {
 	{PCI_DEVICE(PCI_VENDOR_ID_INTEL, TGL_H_DEVICE_ID)},
 	{PCI_DEVICE(PCI_VENDOR_ID_INTEL, ADL_S_DEVICE_ID)},
 	{PCI_DEVICE(PCI_VENDOR_ID_INTEL, ADL_P_DEVICE_ID)},
+	{PCI_DEVICE(PCI_VENDOR_ID_INTEL, ADL_N_DEVICE_ID)},
+	{PCI_DEVICE(PCI_VENDOR_ID_INTEL, RPL_S_DEVICE_ID)},
+	{PCI_DEVICE(PCI_VENDOR_ID_INTEL, MTL_P_DEVICE_ID)},
+	{PCI_DEVICE(PCI_VENDOR_ID_INTEL, ARL_H_DEVICE_ID)},
 	{0, }
 };
 MODULE_DEVICE_TABLE(pci, ish_pci_tbl);
@@ -128,6 +132,14 @@ static int enable_gpe(struct device *dev)
 		return -ENODEV;
 	}
 	wakeup = &adev->wakeup;
+
+	/*
+	 * Call acpi_disable_gpe(), so that reference count
+	 * gpe_event_info->runtime_count doesn't overflow.
+	 * When gpe_event_info->runtime_count = 0, the call
+	 * to acpi_disable_gpe() simply return.
+	 */
+	acpi_disable_gpe(wakeup->gpe_device, wakeup->gpe_number);
 
 	acpi_sts = acpi_enable_gpe(wakeup->gpe_device, wakeup->gpe_number);
 	if (ACPI_FAILURE(acpi_sts)) {
@@ -266,7 +278,8 @@ static void __maybe_unused ish_resume_handler(struct work_struct *work)
 
 	if (ish_should_leave_d0i3(pdev) && !dev->suspend_flag
 			&& IPC_IS_ISH_ILUP(fwsts)) {
-		disable_irq_wake(pdev->irq);
+		if (device_may_wakeup(&pdev->dev))
+			disable_irq_wake(pdev->irq);
 
 		ish_set_host_ready(dev);
 
@@ -337,7 +350,8 @@ static int __maybe_unused ish_suspend(struct device *device)
 			 */
 			pci_save_state(pdev);
 
-			enable_irq_wake(pdev->irq);
+			if (device_may_wakeup(&pdev->dev))
+				enable_irq_wake(pdev->irq);
 		}
 	} else {
 		/*

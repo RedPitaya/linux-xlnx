@@ -28,12 +28,26 @@ struct {
 	__type(value, unsigned int);
 } verdict_map SEC(".maps");
 
+struct {
+	__uint(type, BPF_MAP_TYPE_ARRAY);
+	__uint(max_entries, 1);
+	__type(key, int);
+	__type(value, int);
+} parser_map SEC(".maps");
+
 bool test_sockmap = false; /* toggled by user-space */
 bool test_ingress = false; /* toggled by user-space */
 
 SEC("sk_skb/stream_parser")
 int prog_stream_parser(struct __sk_buff *skb)
 {
+	int *value;
+	__u32 key = 0;
+
+	value = bpf_map_lookup_elem(&parser_map, &key);
+	if (value && *value)
+		return *value;
+
 	return skb->len;
 }
 
@@ -56,7 +70,7 @@ int prog_stream_verdict(struct __sk_buff *skb)
 	return verdict;
 }
 
-SEC("sk_skb/skb_verdict")
+SEC("sk_skb")
 int prog_skb_verdict(struct __sk_buff *skb)
 {
 	unsigned int *count;
@@ -116,5 +130,4 @@ int prog_reuseport(struct sk_reuseport_md *reuse)
 	return verdict;
 }
 
-int _version SEC("version") = 1;
 char _license[] SEC("license") = "GPL";

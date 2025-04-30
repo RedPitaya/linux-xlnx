@@ -161,9 +161,6 @@ static int plug_change(struct Qdisc *sch, struct nlattr *opt,
 	struct plug_sched_data *q = qdisc_priv(sch);
 	struct tc_plug_qopt *msg;
 
-	if (opt == NULL)
-		return -EINVAL;
-
 	msg = nla_data(opt);
 	if (nla_len(opt) < sizeof(*msg))
 		return -EINVAL;
@@ -210,7 +207,7 @@ static struct Qdisc_ops plug_qdisc_ops __read_mostly = {
 	.priv_size   =       sizeof(struct plug_sched_data),
 	.enqueue     =       plug_enqueue,
 	.dequeue     =       plug_dequeue,
-	.peek        =       qdisc_peek_head,
+	.peek        =       qdisc_peek_dequeued,
 	.init        =       plug_init,
 	.change      =       plug_change,
 	.reset       =	     qdisc_reset_queue,

@@ -44,7 +44,6 @@
 #include <linux/random.h>
 #include <net/sock.h>
 #include <linux/xilinx_phy.h>
-#include <linux/clk.h>
 
 #include "xilinx_axienet_tsn.h"
 
@@ -215,7 +214,7 @@ void axienet_set_mac_address_tsn(struct net_device *ndev,
 	struct axienet_local *lp = netdev_priv(ndev);
 
 	if (address)
-		ether_addr_copy(ndev->dev_addr, address);
+		eth_hw_addr_set(ndev, address);
 	if (!is_valid_ether_addr(ndev->dev_addr))
 		eth_hw_addr_random(ndev);
 
@@ -1201,8 +1200,14 @@ static const struct net_device_ops axienet_netdev_ops = {
 #if defined(CONFIG_XILINX_TSN_SWITCH)
 	.ndo_get_port_parent_id = tsn_switch_get_port_parent_id,
 #endif
+	.ndo_setup_tc = axienet_tsn_shaper_tc,
 #endif
 };
+
+bool xlnx_is_port_temac_netdev(const struct net_device *ndev)
+{
+	return ndev && (ndev->netdev_ops == &axienet_netdev_ops);
+}
 
 /**
  * axienet_ethtools_get_drvinfo - Get various Axi Ethernet driver information.
@@ -1285,8 +1290,11 @@ static void axienet_ethtools_get_regs(struct net_device *ndev,
 	data[39] = axienet_dma_in32(lp->dq[0], XAXIDMA_RX_TDESC_OFFSET);
 }
 
-static void axienet_ethtools_get_ringparam(struct net_device *ndev,
-					   struct ethtool_ringparam *ering)
+static void
+axienet_ethtools_get_ringparam(struct net_device *ndev,
+			       struct ethtool_ringparam *ering,
+			       struct kernel_ethtool_ringparam *kernel_ering,
+			       struct netlink_ext_ack *extack)
 {
 	struct axienet_local *lp = netdev_priv(ndev);
 
@@ -1300,8 +1308,12 @@ static void axienet_ethtools_get_ringparam(struct net_device *ndev,
 	ering->tx_pending = lp->tx_bd_num;
 }
 
-static int axienet_ethtools_set_ringparam(struct net_device *ndev,
-					  struct ethtool_ringparam *ering)
+static int
+axienet_ethtools_set_ringparam(struct net_device *ndev,
+			       struct ethtool_ringparam *ering,
+			       struct kernel_ethtool_ringparam *kernel_ering,
+			       struct netlink_ext_ack *extack)
+
 {
 	struct axienet_local *lp = netdev_priv(ndev);
 
@@ -1596,6 +1608,11 @@ static const struct ethtool_ops axienet_ethtool_ops = {
 #endif
 	.get_link_ksettings = phy_ethtool_get_link_ksettings,
 	.set_link_ksettings = phy_ethtool_set_link_ksettings,
+#if defined(CONFIG_XILINX_TSN_QBR)
+	.get_mm		= axienet_preemption_sts_ethtool,
+	.set_mm		= axienet_preemption_ctrl_ethtool,
+	.get_mm_stats	= axienet_preemption_cnt_ethtool,
+#endif
 };
 
 static int axienet_clk_init(struct platform_device *pdev,
@@ -1747,6 +1764,7 @@ static int axienet_probe(struct platform_device *pdev)
 	SET_NETDEV_DEV(ndev, &pdev->dev);
 	ndev->flags &= ~IFF_MULTICAST;  /* clear multicast */
 	ndev->features = NETIF_F_SG;
+	ndev->hw_features |= NETIF_F_HW_TC;
 	ndev->netdev_ops = &axienet_netdev_ops;
 	ndev->ethtool_ops = &axienet_ethtool_ops;
 
@@ -1896,6 +1914,9 @@ static int axienet_probe(struct platform_device *pdev)
 
 	ret = axienet_tsn_probe(pdev, lp, ndev);
 
+	if (ret)
+		goto cleanup_clk;
+
 	ret = axienet_clk_init(pdev, &lp->aclk, &lp->eth_sclk,
 			       &lp->eth_refclk, &lp->eth_dclk);
 	if (ret) {
@@ -1930,7 +1951,7 @@ static int axienet_probe(struct platform_device *pdev)
 
 	lp->phy_node = of_parse_phandle(pdev->dev.of_node, "phy-handle", 0);
 	if (lp->phy_node) {
-		ret = axienet_mdio_setup(lp);
+		ret = axienet_mdio_setup_tsn(lp);
 		if (ret)
 			dev_warn(&pdev->dev,
 				 "error registering MDIO bus: %d\n", ret);
@@ -1946,7 +1967,7 @@ static int axienet_probe(struct platform_device *pdev)
 	ret = register_netdev(lp->ndev);
 	if (ret) {
 		dev_err(lp->dev, "register_netdev() error (%i)\n", ret);
-		axienet_mdio_teardown(lp);
+		axienet_mdio_teardown_tsn(lp);
 		goto cleanup_clk;
 	}
 
@@ -1981,7 +2002,7 @@ static int axienet_remove(struct platform_device *pdev)
 	axienet_clk_disable(pdev);
 
 	if (lp->mii_bus)
-		axienet_mdio_teardown(lp);
+		axienet_mdio_teardown_tsn(lp);
 
 	clk_bulk_disable_unprepare(XAE_NUM_MISC_CLOCKS, lp->misc_clks);
 	clk_disable_unprepare(lp->axi_clk);

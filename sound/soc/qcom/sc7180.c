@@ -17,6 +17,7 @@
 #include <uapi/linux/input-event-codes.h>
 
 #include "../codecs/rt5682.h"
+#include "../codecs/rt5682s.h"
 #include "common.h"
 #include "lpass.h"
 
@@ -41,6 +42,17 @@ static void sc7180_jack_free(struct snd_jack *jack)
 	snd_soc_component_set_jack(component, NULL, NULL);
 }
 
+static struct snd_soc_jack_pin sc7180_jack_pins[] = {
+	{
+		.pin = "Headphone Jack",
+		.mask = SND_JACK_HEADPHONE,
+	},
+	{
+		.pin = "Headset Mic",
+		.mask = SND_JACK_MICROPHONE,
+	},
+};
+
 static int sc7180_headset_init(struct snd_soc_pcm_runtime *rtd)
 {
 	struct snd_soc_card *card = rtd->card;
@@ -50,13 +62,14 @@ static int sc7180_headset_init(struct snd_soc_pcm_runtime *rtd)
 	struct snd_jack *jack;
 	int rval;
 
-	rval = snd_soc_card_jack_new(
-			card, "Headset Jack",
-			SND_JACK_HEADSET |
-			SND_JACK_HEADPHONE |
-			SND_JACK_BTN_0 | SND_JACK_BTN_1 |
-			SND_JACK_BTN_2 | SND_JACK_BTN_3,
-			&pdata->hs_jack, NULL, 0);
+	rval = snd_soc_card_jack_new_pins(card, "Headset Jack",
+					  SND_JACK_HEADSET |
+					  SND_JACK_HEADPHONE |
+					  SND_JACK_BTN_0 | SND_JACK_BTN_1 |
+					  SND_JACK_BTN_2 | SND_JACK_BTN_3,
+					  &pdata->hs_jack,
+					  sc7180_jack_pins,
+					  ARRAY_SIZE(sc7180_jack_pins));
 
 	if (rval < 0) {
 		dev_err(card->dev, "Unable to add Headset Jack\n");
@@ -88,7 +101,7 @@ static int sc7180_hdmi_init(struct snd_soc_pcm_runtime *rtd)
 	rval = snd_soc_card_jack_new(
 			card, "HDMI Jack",
 			SND_JACK_LINEOUT,
-			&pdata->hdmi_jack, NULL, 0);
+			&pdata->hdmi_jack);
 
 	if (rval < 0) {
 		dev_err(card->dev, "Unable to add HDMI Jack\n");
@@ -128,7 +141,21 @@ static int sc7180_snd_startup(struct snd_pcm_substream *substream)
 	struct sc7180_snd_data *data = snd_soc_card_get_drvdata(card);
 	struct snd_soc_dai *cpu_dai = asoc_rtd_to_cpu(rtd, 0);
 	struct snd_soc_dai *codec_dai = asoc_rtd_to_codec(rtd, 0);
-	int ret;
+	int pll_id, pll_source, pll_in, pll_out, clk_id, ret;
+
+	if (!strcmp(codec_dai->name, "rt5682-aif1")) {
+		pll_source = RT5682_PLL1_S_MCLK;
+		pll_id = 0;
+		clk_id = RT5682_SCLK_S_PLL1;
+		pll_out = RT5682_PLL1_FREQ;
+		pll_in = DEFAULT_MCLK_RATE;
+	} else if (!strcmp(codec_dai->name, "rt5682s-aif1")) {
+		pll_source = RT5682S_PLL_S_MCLK;
+		pll_id = RT5682S_PLL2;
+		clk_id = RT5682S_SCLK_S_PLL2;
+		pll_out = RT5682_PLL1_FREQ;
+		pll_in = DEFAULT_MCLK_RATE;
+	}
 
 	switch (cpu_dai->id) {
 	case MI2S_PRIMARY:
@@ -140,21 +167,20 @@ static int sc7180_snd_startup(struct snd_pcm_substream *substream)
 		}
 
 		snd_soc_dai_set_fmt(codec_dai,
-				    SND_SOC_DAIFMT_CBS_CFS |
+				    SND_SOC_DAIFMT_BC_FC |
 				    SND_SOC_DAIFMT_NB_NF |
 				    SND_SOC_DAIFMT_I2S);
 
 		/* Configure PLL1 for codec */
-		ret = snd_soc_dai_set_pll(codec_dai, 0, RT5682_PLL1_S_MCLK,
-					  DEFAULT_MCLK_RATE, RT5682_PLL1_FREQ);
+		ret = snd_soc_dai_set_pll(codec_dai, pll_id, pll_source,
+					  pll_in, pll_out);
 		if (ret) {
 			dev_err(rtd->dev, "can't set codec pll: %d\n", ret);
 			return ret;
 		}
 
 		/* Configure sysclk for codec */
-		ret = snd_soc_dai_set_sysclk(codec_dai, RT5682_SCLK_S_PLL1,
-					     RT5682_PLL1_FREQ,
+		ret = snd_soc_dai_set_sysclk(codec_dai, clk_id, pll_out,
 					     SND_SOC_CLOCK_IN);
 		if (ret)
 			dev_err(rtd->dev, "snd_soc_dai_set_sysclk err = %d\n",
@@ -283,6 +309,11 @@ static const struct snd_soc_dapm_widget sc7180_snd_widgets[] = {
 	SND_SOC_DAPM_MIC("Headset Mic", NULL),
 };
 
+static const struct snd_kcontrol_new sc7180_snd_controls[] = {
+	SOC_DAPM_PIN_SWITCH("Headphone Jack"),
+	SOC_DAPM_PIN_SWITCH("Headset Mic"),
+};
+
 static const struct snd_soc_dapm_widget sc7180_adau7002_snd_widgets[] = {
 	SND_SOC_DAPM_MIC("DMIC", NULL),
 };
@@ -304,6 +335,11 @@ static const struct snd_soc_dapm_widget sc7180_snd_dual_mic_widgets[] = {
 	SND_SOC_DAPM_MIC("Headset Mic", NULL),
 	SND_SOC_DAPM_MIC("DMIC", NULL),
 	SND_SOC_DAPM_MUX("Dmic Mux", SND_SOC_NOPM, 0, 0, &sc7180_dmic_mux_control),
+};
+
+static const struct snd_kcontrol_new sc7180_snd_dual_mic_controls[] = {
+	SOC_DAPM_PIN_SWITCH("Headphone Jack"),
+	SOC_DAPM_PIN_SWITCH("Headset Mic"),
 };
 
 static const struct snd_soc_dapm_route sc7180_snd_dual_mic_audio_route[] = {
@@ -334,10 +370,14 @@ static int sc7180_snd_platform_probe(struct platform_device *pdev)
 	card->dev = dev;
 	card->dapm_widgets = sc7180_snd_widgets;
 	card->num_dapm_widgets = ARRAY_SIZE(sc7180_snd_widgets);
+	card->controls = sc7180_snd_controls;
+	card->num_controls = ARRAY_SIZE(sc7180_snd_controls);
 
 	if (of_property_read_bool(dev->of_node, "dmic-gpios")) {
 		card->dapm_widgets = sc7180_snd_dual_mic_widgets,
 		card->num_dapm_widgets = ARRAY_SIZE(sc7180_snd_dual_mic_widgets),
+		card->controls = sc7180_snd_dual_mic_controls,
+		card->num_controls = ARRAY_SIZE(sc7180_snd_dual_mic_controls),
 		card->dapm_routes = sc7180_snd_dual_mic_audio_route,
 		card->num_dapm_routes = ARRAY_SIZE(sc7180_snd_dual_mic_audio_route),
 		data->dmic_sel = devm_gpiod_get(&pdev->dev, "dmic", GPIOD_OUT_LOW);

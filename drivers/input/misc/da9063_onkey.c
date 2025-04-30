@@ -4,11 +4,13 @@
  * Copyright (C) 2015  Dialog Semiconductor Ltd.
  */
 
+#include <linux/devm-helpers.h>
 #include <linux/module.h>
 #include <linux/errno.h>
 #include <linux/input.h>
 #include <linux/interrupt.h>
 #include <linux/platform_device.h>
+#include <linux/pm_wakeirq.h>
 #include <linux/workqueue.h>
 #include <linux/regmap.h>
 #include <linux/of.h>
@@ -182,13 +184,6 @@ static irqreturn_t da9063_onkey_irq_handler(int irq, void *data)
 	return IRQ_HANDLED;
 }
 
-static void da9063_cancel_poll(void *data)
-{
-	struct da9063_onkey *onkey = data;
-
-	cancel_delayed_work_sync(&onkey->work);
-}
-
 static int da9063_onkey_probe(struct platform_device *pdev)
 {
 	struct da9063_onkey *onkey;
@@ -234,9 +229,8 @@ static int da9063_onkey_probe(struct platform_device *pdev)
 
 	input_set_capability(onkey->input, EV_KEY, KEY_POWER);
 
-	INIT_DELAYED_WORK(&onkey->work, da9063_poll_on);
-
-	error = devm_add_action(&pdev->dev, da9063_cancel_poll, onkey);
+	error = devm_delayed_work_autocancel(&pdev->dev, &onkey->work,
+					     da9063_poll_on);
 	if (error) {
 		dev_err(&pdev->dev,
 			"Failed to add cancel poll action: %d\n",
@@ -257,6 +251,14 @@ static int da9063_onkey_probe(struct platform_device *pdev)
 			"Failed to request IRQ %d: %d\n", irq, error);
 		return error;
 	}
+
+	error = dev_pm_set_wake_irq(&pdev->dev, irq);
+	if (error)
+		dev_warn(&pdev->dev,
+			 "Failed to set IRQ %d as a wake IRQ: %d\n",
+			 irq, error);
+	else
+		device_init_wakeup(&pdev->dev, true);
 
 	error = input_register_device(onkey->input);
 	if (error) {

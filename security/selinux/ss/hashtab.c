@@ -2,12 +2,13 @@
 /*
  * Implementation of the hash table type.
  *
- * Author : Stephen Smalley, <sds@tycho.nsa.gov>
+ * Author : Stephen Smalley, <stephen.smalley.work@gmail.com>
  */
 #include <linux/kernel.h>
 #include <linux/slab.h>
 #include <linux/errno.h>
 #include "hashtab.h"
+#include "security.h"
 
 static struct kmem_cache *hashtab_node_cachep __ro_after_init;
 
@@ -30,13 +31,20 @@ static u32 hashtab_compute_size(u32 nel)
 
 int hashtab_init(struct hashtab *h, u32 nel_hint)
 {
-	h->size = hashtab_compute_size(nel_hint);
-	h->nel = 0;
-	if (!h->size)
-		return 0;
+	u32 size = hashtab_compute_size(nel_hint);
 
-	h->htable = kcalloc(h->size, sizeof(*h->htable), GFP_KERNEL);
-	return h->htable ? 0 : -ENOMEM;
+	/* should already be zeroed, but better be safe */
+	h->nel = 0;
+	h->size = 0;
+	h->htable = NULL;
+
+	if (size) {
+		h->htable = kcalloc(size, sizeof(*h->htable), GFP_KERNEL);
+		if (!h->htable)
+			return -ENOMEM;
+		h->size = size;
+	}
+	return 0;
 }
 
 int __hashtab_insert(struct hashtab *h, struct hashtab_node **dst,
@@ -95,7 +103,7 @@ int hashtab_map(struct hashtab *h,
 	return 0;
 }
 
-
+#ifdef CONFIG_SECURITY_SELINUX_DEBUG
 void hashtab_stat(struct hashtab *h, struct hashtab_info *info)
 {
 	u32 i, chain_len, slots_used, max_chain_len;
@@ -121,6 +129,7 @@ void hashtab_stat(struct hashtab *h, struct hashtab_info *info)
 	info->slots_used = slots_used;
 	info->max_chain_len = max_chain_len;
 }
+#endif /* CONFIG_SECURITY_SELINUX_DEBUG */
 
 int hashtab_duplicate(struct hashtab *new, struct hashtab *orig,
 		int (*copy)(struct hashtab_node *new,
@@ -129,7 +138,8 @@ int hashtab_duplicate(struct hashtab *new, struct hashtab *orig,
 		void *args)
 {
 	struct hashtab_node *cur, *tmp, *tail;
-	int i, rc;
+	u32 i;
+	int rc;
 
 	memset(new, 0, sizeof(*new));
 
@@ -171,7 +181,8 @@ int hashtab_duplicate(struct hashtab *new, struct hashtab *orig,
 			kmem_cache_free(hashtab_node_cachep, cur);
 		}
 	}
-	kmem_cache_free(hashtab_node_cachep, new);
+	kfree(new->htable);
+	memset(new, 0, sizeof(*new));
 	return -ENOMEM;
 }
 

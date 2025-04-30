@@ -30,6 +30,7 @@
 #include <linux/ratelimit.h>
 #include <linux/uaccess.h>
 #include <linux/kdebug.h>
+#include <linux/kfence.h>
 
 #include <asm/assembly.h>
 #include <asm/io.h>
@@ -45,6 +46,10 @@
 #include <asm/cacheflush.h>
 #include <linux/kgdb.h>
 #include <linux/kprobes.h>
+
+#if defined(CONFIG_LIGHTWEIGHT_SPINLOCK_CHECK)
+#include <asm/spinlock.h>
+#endif
 
 #include "../math-emu/math-emu.h"	/* for handle_fpe() */
 
@@ -143,7 +148,7 @@ void show_regs(struct pt_regs *regs)
 	printk("%s IIR: %08lx    ISR: " RFMT "  IOR: " RFMT "\n",
 	       level, regs->iir, regs->isr, regs->ior);
 	printk("%s CPU: %8d   CR30: " RFMT " CR31: " RFMT "\n",
-	       level, current_thread_info()->cpu, cr30, cr31);
+	       level, task_cpu(current), cr30, cr31);
 	printk("%s ORIG_R28: " RFMT "\n", level, regs->orig_r28);
 
 	if (user) {
@@ -238,13 +243,6 @@ void die_if_kernel(char *str, struct pt_regs *regs, long err)
 	/* unlock the pdc lock if necessary */
 	pdc_emergency_unlock();
 
-	/* maybe the kernel hasn't booted very far yet and hasn't been able 
-	 * to initialize the serial or STI console. In that case we should 
-	 * re-enable the pdc console, so that the user will be able to 
-	 * identify the problem. */
-	if (!console_drivers)
-		pdc_console_restart();
-	
 	if (err)
 		printk(KERN_CRIT "%s (pid %d): %s (code %ld)\n",
 			current->comm, task_pid_nr(current), str, err);
@@ -268,7 +266,7 @@ void die_if_kernel(char *str, struct pt_regs *regs, long err)
 		panic("Fatal exception");
 
 	oops_exit();
-	do_exit(SIGSEGV);
+	make_task_dead(SIGSEGV);
 }
 
 /* gdb uses break 4,8 */
@@ -297,18 +295,27 @@ static void handle_break(struct pt_regs *regs)
 	}
 
 #ifdef CONFIG_KPROBES
-	if (unlikely(iir == PARISC_KPROBES_BREAK_INSN)) {
+	if (unlikely(iir == PARISC_KPROBES_BREAK_INSN && !user_mode(regs))) {
 		parisc_kprobe_break_handler(regs);
 		return;
 	}
-
+	if (unlikely(iir == PARISC_KPROBES_BREAK_INSN2 && !user_mode(regs))) {
+		parisc_kprobe_ss_handler(regs);
+		return;
+	}
 #endif
 
 #ifdef CONFIG_KGDB
-	if (unlikely(iir == PARISC_KGDB_COMPILED_BREAK_INSN ||
-		iir == PARISC_KGDB_BREAK_INSN)) {
+	if (unlikely((iir == PARISC_KGDB_COMPILED_BREAK_INSN ||
+		iir == PARISC_KGDB_BREAK_INSN)) && !user_mode(regs)) {
 		kgdb_handle_exception(9, SIGTRAP, 0, regs);
 		return;
+	}
+#endif
+
+#ifdef CONFIG_LIGHTWEIGHT_SPINLOCK_CHECK
+        if ((iir == SPINLOCK_BREAK_INSN) && !user_mode(regs)) {
+		die_if_kernel("Spinlock was trashed", regs, 1);
 	}
 #endif
 
@@ -328,10 +335,7 @@ static void default_trap(int code, struct pt_regs *regs)
 	show_regs(regs);
 }
 
-void (*cpu_lpmc) (int code, struct pt_regs *regs) __read_mostly = default_trap;
-
-
-void transfer_pim_to_trap_frame(struct pt_regs *regs)
+static void transfer_pim_to_trap_frame(struct pt_regs *regs)
 {
     register int i;
     extern unsigned int hpmc_pim_data[];
@@ -425,10 +429,6 @@ void parisc_terminate(char *msg, struct pt_regs *regs, int code, unsigned long o
 	/* unlock the pdc lock if necessary */
 	pdc_emergency_unlock();
 
-	/* restart pdc console if necessary */
-	if (!console_drivers)
-		pdc_console_restart();
-
 	/* Not all paths will gutter the processor... */
 	switch(code){
 
@@ -465,7 +465,7 @@ void parisc_terminate(char *msg, struct pt_regs *regs, int code, unsigned long o
 	 * panic notifiers, and we should call panic
 	 * directly from the location that we wish. 
 	 * e.g. We should not call panic from
-	 * parisc_terminate, but rather the oter way around.
+	 * parisc_terminate, but rather the other way around.
 	 * This hack works, prints the panic message twice,
 	 * and it enables reboot timers!
 	 */
@@ -478,9 +478,7 @@ void notrace handle_interruption(int code, struct pt_regs *regs)
 	unsigned long fault_space = 0;
 	int si_code;
 
-	if (code == 1)
-	    pdc_console_restart();  /* switch back to pdc if HPMC */
-	else
+	if (!irqs_disabled_flags(regs->gr[0]))
 	    local_irq_enable();
 
 	/* Security check:
@@ -538,11 +536,6 @@ void notrace handle_interruption(int code, struct pt_regs *regs)
 		/* Recovery counter trap */
 		regs->gr[0] &= ~PSW_R;
 
-#ifdef CONFIG_KPROBES
-		if (parisc_kprobe_ss_handler(regs))
-			return;
-#endif
-
 #ifdef CONFIG_KGDB
 		if (kgdb_single_step) {
 			kgdb_handle_exception(0, SIGTRAP, 0, regs);
@@ -561,7 +554,7 @@ void notrace handle_interruption(int code, struct pt_regs *regs)
 		
 		flush_cache_all();
 		flush_tlb_all();
-		cpu_lpmc(5, regs);
+		default_trap(code, regs);
 		return;
 
 	case  PARISC_ITLB_TRAP:
@@ -661,6 +654,8 @@ void notrace handle_interruption(int code, struct pt_regs *regs)
 			 by hand. Technically we need to emulate:
 			 fdc,fdce,pdc,"fic,4f",prober,probeir,probew, probeiw
 		*/
+		if (code == 17 && handle_nadtlb_fault(regs))
+			return;
 		fault_address = regs->ior;
 		fault_space = regs->isr;
 		break;
@@ -729,6 +724,8 @@ void notrace handle_interruption(int code, struct pt_regs *regs)
 			}
 			mmap_read_unlock(current->mm);
 		}
+		/* CPU could not fetch instruction, so clear stale IIR value. */
+		regs->iir = 0xbaadf00d;
 		fallthrough;
 	case 27: 
 		/* Data memory protection ID trap */
@@ -782,10 +779,14 @@ void notrace handle_interruption(int code, struct pt_regs *regs)
 	     * unless pagefault_disable() was called before.
 	     */
 
-	    if (fault_space == 0 && !faulthandler_disabled())
+	    if (faulthandler_disabled() || fault_space == 0)
 	    {
 		/* Clean up and return if in exception table. */
 		if (fixup_exception(regs))
+			return;
+		/* Clean up and return if handled by kfence. */
+		if (kfence_handle_page_fault(fault_address,
+			parisc_acctyp(code, regs->iir) == VM_WRITE, regs))
 			return;
 		pdc_chassis_send_status(PDC_CHASSIS_DIRECT_PANIC);
 		parisc_terminate("Kernel Fault", regs, code, fault_address);
@@ -796,14 +797,13 @@ void notrace handle_interruption(int code, struct pt_regs *regs)
 }
 
 
-void __init initialize_ivt(const void *iva)
+static void __init initialize_ivt(const void *iva)
 {
 	extern const u32 os_hpmc[];
 
 	int i;
 	u32 check = 0;
 	u32 *ivap;
-	u32 *hpmcp;
 	u32 instr;
 
 	if (strcmp((const char *)iva, "cows can fly"))
@@ -835,8 +835,6 @@ void __init initialize_ivt(const void *iva)
 
 	/* Setup IVA and compute checksum for HPMC handler */
 	ivap[6] = (u32)__pa(os_hpmc);
-
-	hpmcp = (u32 *)os_hpmc;
 
 	for (i=0; i<8; i++)
 	    check += ivap[i];

@@ -15,12 +15,11 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/ioctl.h>
+#include <pthread.h>
 
 #include "test_util.h"
 #include "kvm_util.h"
 #include "processor.h"
-
-#define VCPU_ID 5
 
 #define UCALL_PIO_PORT ((uint16_t)0x1000)
 
@@ -82,8 +81,136 @@ static void compare_vcpu_events(struct kvm_vcpu_events *left,
 #define TEST_SYNC_FIELDS   (KVM_SYNC_X86_REGS|KVM_SYNC_X86_SREGS|KVM_SYNC_X86_EVENTS)
 #define INVALID_SYNC_FIELD 0x80000000
 
+/*
+ * Set an exception as pending *and* injected while KVM is processing events.
+ * KVM is supposed to ignore/drop pending exceptions if userspace is also
+ * requesting that an exception be injected.
+ */
+static void *race_events_inj_pen(void *arg)
+{
+	struct kvm_run *run = (struct kvm_run *)arg;
+	struct kvm_vcpu_events *events = &run->s.regs.events;
+
+	WRITE_ONCE(events->exception.nr, UD_VECTOR);
+
+	for (;;) {
+		WRITE_ONCE(run->kvm_dirty_regs, KVM_SYNC_X86_EVENTS);
+		WRITE_ONCE(events->flags, 0);
+		WRITE_ONCE(events->exception.injected, 1);
+		WRITE_ONCE(events->exception.pending, 1);
+
+		pthread_testcancel();
+	}
+
+	return NULL;
+}
+
+/*
+ * Set an invalid exception vector while KVM is processing events.  KVM is
+ * supposed to reject any vector >= 32, as well as NMIs (vector 2).
+ */
+static void *race_events_exc(void *arg)
+{
+	struct kvm_run *run = (struct kvm_run *)arg;
+	struct kvm_vcpu_events *events = &run->s.regs.events;
+
+	for (;;) {
+		WRITE_ONCE(run->kvm_dirty_regs, KVM_SYNC_X86_EVENTS);
+		WRITE_ONCE(events->flags, 0);
+		WRITE_ONCE(events->exception.nr, UD_VECTOR);
+		WRITE_ONCE(events->exception.pending, 1);
+		WRITE_ONCE(events->exception.nr, 255);
+
+		pthread_testcancel();
+	}
+
+	return NULL;
+}
+
+/*
+ * Toggle CR4.PAE while KVM is processing SREGS, EFER.LME=1 with CR4.PAE=0 is
+ * illegal, and KVM's MMU heavily relies on vCPU state being valid.
+ */
+static noinline void *race_sregs_cr4(void *arg)
+{
+	struct kvm_run *run = (struct kvm_run *)arg;
+	__u64 *cr4 = &run->s.regs.sregs.cr4;
+	__u64 pae_enabled = *cr4;
+	__u64 pae_disabled = *cr4 & ~X86_CR4_PAE;
+
+	for (;;) {
+		WRITE_ONCE(run->kvm_dirty_regs, KVM_SYNC_X86_SREGS);
+		WRITE_ONCE(*cr4, pae_enabled);
+		asm volatile(".rept 512\n\t"
+			     "nop\n\t"
+			     ".endr");
+		WRITE_ONCE(*cr4, pae_disabled);
+
+		pthread_testcancel();
+	}
+
+	return NULL;
+}
+
+static void race_sync_regs(void *racer)
+{
+	const time_t TIMEOUT = 2; /* seconds, roughly */
+	struct kvm_x86_state *state;
+	struct kvm_translation tr;
+	struct kvm_vcpu *vcpu;
+	struct kvm_run *run;
+	struct kvm_vm *vm;
+	pthread_t thread;
+	time_t t;
+
+	vm = vm_create_with_one_vcpu(&vcpu, guest_code);
+	run = vcpu->run;
+
+	run->kvm_valid_regs = KVM_SYNC_X86_SREGS;
+	vcpu_run(vcpu);
+	run->kvm_valid_regs = 0;
+
+	/* Save state *before* spawning the thread that mucks with vCPU state. */
+	state = vcpu_save_state(vcpu);
+
+	/*
+	 * Selftests run 64-bit guests by default, both EFER.LME and CR4.PAE
+	 * should already be set in guest state.
+	 */
+	TEST_ASSERT((run->s.regs.sregs.cr4 & X86_CR4_PAE) &&
+		    (run->s.regs.sregs.efer & EFER_LME),
+		    "vCPU should be in long mode, CR4.PAE=%d, EFER.LME=%d",
+		    !!(run->s.regs.sregs.cr4 & X86_CR4_PAE),
+		    !!(run->s.regs.sregs.efer & EFER_LME));
+
+	TEST_ASSERT_EQ(pthread_create(&thread, NULL, racer, (void *)run), 0);
+
+	for (t = time(NULL) + TIMEOUT; time(NULL) < t;) {
+		/*
+		 * Reload known good state if the vCPU triple faults, e.g. due
+		 * to the unhandled #GPs being injected.  VMX preserves state
+		 * on shutdown, but SVM synthesizes an INIT as the VMCB state
+		 * is architecturally undefined on triple fault.
+		 */
+		if (!__vcpu_run(vcpu) && run->exit_reason == KVM_EXIT_SHUTDOWN)
+			vcpu_load_state(vcpu, state);
+
+		if (racer == race_sregs_cr4) {
+			tr = (struct kvm_translation) { .linear_address = 0 };
+			__vcpu_ioctl(vcpu, KVM_TRANSLATE, &tr);
+		}
+	}
+
+	TEST_ASSERT_EQ(pthread_cancel(thread), 0);
+	TEST_ASSERT_EQ(pthread_join(thread, NULL), 0);
+
+	kvm_x86_state_cleanup(state);
+	kvm_vm_free(vm);
+}
+
 int main(int argc, char *argv[])
 {
+	struct kvm_vcpu *vcpu;
 	struct kvm_vm *vm;
 	struct kvm_run *run;
 	struct kvm_regs regs;
@@ -91,70 +218,57 @@ int main(int argc, char *argv[])
 	struct kvm_vcpu_events events;
 	int rv, cap;
 
-	/* Tell stdout not to buffer its content */
-	setbuf(stdout, NULL);
-
 	cap = kvm_check_cap(KVM_CAP_SYNC_REGS);
-	if ((cap & TEST_SYNC_FIELDS) != TEST_SYNC_FIELDS) {
-		print_skip("KVM_CAP_SYNC_REGS not supported");
-		exit(KSFT_SKIP);
-	}
-	if ((cap & INVALID_SYNC_FIELD) != 0) {
-		print_skip("The \"invalid\" field is not invalid");
-		exit(KSFT_SKIP);
-	}
+	TEST_REQUIRE((cap & TEST_SYNC_FIELDS) == TEST_SYNC_FIELDS);
+	TEST_REQUIRE(!(cap & INVALID_SYNC_FIELD));
 
-	/* Create VM */
-	vm = vm_create_default(VCPU_ID, 0, guest_code);
+	vm = vm_create_with_one_vcpu(&vcpu, guest_code);
 
-	run = vcpu_state(vm, VCPU_ID);
+	run = vcpu->run;
 
 	/* Request reading invalid register set from VCPU. */
 	run->kvm_valid_regs = INVALID_SYNC_FIELD;
-	rv = _vcpu_run(vm, VCPU_ID);
+	rv = _vcpu_run(vcpu);
 	TEST_ASSERT(rv < 0 && errno == EINVAL,
 		    "Invalid kvm_valid_regs did not cause expected KVM_RUN error: %d\n",
 		    rv);
-	vcpu_state(vm, VCPU_ID)->kvm_valid_regs = 0;
+	run->kvm_valid_regs = 0;
 
 	run->kvm_valid_regs = INVALID_SYNC_FIELD | TEST_SYNC_FIELDS;
-	rv = _vcpu_run(vm, VCPU_ID);
+	rv = _vcpu_run(vcpu);
 	TEST_ASSERT(rv < 0 && errno == EINVAL,
 		    "Invalid kvm_valid_regs did not cause expected KVM_RUN error: %d\n",
 		    rv);
-	vcpu_state(vm, VCPU_ID)->kvm_valid_regs = 0;
+	run->kvm_valid_regs = 0;
 
 	/* Request setting invalid register set into VCPU. */
 	run->kvm_dirty_regs = INVALID_SYNC_FIELD;
-	rv = _vcpu_run(vm, VCPU_ID);
+	rv = _vcpu_run(vcpu);
 	TEST_ASSERT(rv < 0 && errno == EINVAL,
 		    "Invalid kvm_dirty_regs did not cause expected KVM_RUN error: %d\n",
 		    rv);
-	vcpu_state(vm, VCPU_ID)->kvm_dirty_regs = 0;
+	run->kvm_dirty_regs = 0;
 
 	run->kvm_dirty_regs = INVALID_SYNC_FIELD | TEST_SYNC_FIELDS;
-	rv = _vcpu_run(vm, VCPU_ID);
+	rv = _vcpu_run(vcpu);
 	TEST_ASSERT(rv < 0 && errno == EINVAL,
 		    "Invalid kvm_dirty_regs did not cause expected KVM_RUN error: %d\n",
 		    rv);
-	vcpu_state(vm, VCPU_ID)->kvm_dirty_regs = 0;
+	run->kvm_dirty_regs = 0;
 
 	/* Request and verify all valid register sets. */
 	/* TODO: BUILD TIME CHECK: TEST_ASSERT(KVM_SYNC_X86_NUM_FIELDS != 3); */
 	run->kvm_valid_regs = TEST_SYNC_FIELDS;
-	rv = _vcpu_run(vm, VCPU_ID);
-	TEST_ASSERT(run->exit_reason == KVM_EXIT_IO,
-		    "Unexpected exit reason: %u (%s),\n",
-		    run->exit_reason,
-		    exit_reason_str(run->exit_reason));
+	rv = _vcpu_run(vcpu);
+	TEST_ASSERT_KVM_EXIT_REASON(vcpu, KVM_EXIT_IO);
 
-	vcpu_regs_get(vm, VCPU_ID, &regs);
+	vcpu_regs_get(vcpu, &regs);
 	compare_regs(&regs, &run->s.regs.regs);
 
-	vcpu_sregs_get(vm, VCPU_ID, &sregs);
+	vcpu_sregs_get(vcpu, &sregs);
 	compare_sregs(&sregs, &run->s.regs.sregs);
 
-	vcpu_events_get(vm, VCPU_ID, &events);
+	vcpu_events_get(vcpu, &events);
 	compare_vcpu_events(&events, &run->s.regs.events);
 
 	/* Set and verify various register values. */
@@ -164,11 +278,8 @@ int main(int argc, char *argv[])
 
 	run->kvm_valid_regs = TEST_SYNC_FIELDS;
 	run->kvm_dirty_regs = KVM_SYNC_X86_REGS | KVM_SYNC_X86_SREGS;
-	rv = _vcpu_run(vm, VCPU_ID);
-	TEST_ASSERT(run->exit_reason == KVM_EXIT_IO,
-		    "Unexpected exit reason: %u (%s),\n",
-		    run->exit_reason,
-		    exit_reason_str(run->exit_reason));
+	rv = _vcpu_run(vcpu);
+	TEST_ASSERT_KVM_EXIT_REASON(vcpu, KVM_EXIT_IO);
 	TEST_ASSERT(run->s.regs.regs.rbx == 0xBAD1DEA + 1,
 		    "rbx sync regs value incorrect 0x%llx.",
 		    run->s.regs.regs.rbx);
@@ -176,13 +287,13 @@ int main(int argc, char *argv[])
 		    "apic_base sync regs value incorrect 0x%llx.",
 		    run->s.regs.sregs.apic_base);
 
-	vcpu_regs_get(vm, VCPU_ID, &regs);
+	vcpu_regs_get(vcpu, &regs);
 	compare_regs(&regs, &run->s.regs.regs);
 
-	vcpu_sregs_get(vm, VCPU_ID, &sregs);
+	vcpu_sregs_get(vcpu, &sregs);
 	compare_sregs(&sregs, &run->s.regs.sregs);
 
-	vcpu_events_get(vm, VCPU_ID, &events);
+	vcpu_events_get(vcpu, &events);
 	compare_vcpu_events(&events, &run->s.regs.events);
 
 	/* Clear kvm_dirty_regs bits, verify new s.regs values are
@@ -191,11 +302,8 @@ int main(int argc, char *argv[])
 	run->kvm_valid_regs = TEST_SYNC_FIELDS;
 	run->kvm_dirty_regs = 0;
 	run->s.regs.regs.rbx = 0xDEADBEEF;
-	rv = _vcpu_run(vm, VCPU_ID);
-	TEST_ASSERT(run->exit_reason == KVM_EXIT_IO,
-		    "Unexpected exit reason: %u (%s),\n",
-		    run->exit_reason,
-		    exit_reason_str(run->exit_reason));
+	rv = _vcpu_run(vcpu);
+	TEST_ASSERT_KVM_EXIT_REASON(vcpu, KVM_EXIT_IO);
 	TEST_ASSERT(run->s.regs.regs.rbx != 0xDEADBEEF,
 		    "rbx sync regs value incorrect 0x%llx.",
 		    run->s.regs.regs.rbx);
@@ -208,16 +316,13 @@ int main(int argc, char *argv[])
 	run->kvm_dirty_regs = 0;
 	run->s.regs.regs.rbx = 0xAAAA;
 	regs.rbx = 0xBAC0;
-	vcpu_regs_set(vm, VCPU_ID, &regs);
-	rv = _vcpu_run(vm, VCPU_ID);
-	TEST_ASSERT(run->exit_reason == KVM_EXIT_IO,
-		    "Unexpected exit reason: %u (%s),\n",
-		    run->exit_reason,
-		    exit_reason_str(run->exit_reason));
+	vcpu_regs_set(vcpu, &regs);
+	rv = _vcpu_run(vcpu);
+	TEST_ASSERT_KVM_EXIT_REASON(vcpu, KVM_EXIT_IO);
 	TEST_ASSERT(run->s.regs.regs.rbx == 0xAAAA,
 		    "rbx sync regs value incorrect 0x%llx.",
 		    run->s.regs.regs.rbx);
-	vcpu_regs_get(vm, VCPU_ID, &regs);
+	vcpu_regs_get(vcpu, &regs);
 	TEST_ASSERT(regs.rbx == 0xBAC0 + 1,
 		    "rbx guest value incorrect 0x%llx.",
 		    regs.rbx);
@@ -229,20 +334,21 @@ int main(int argc, char *argv[])
 	run->kvm_valid_regs = 0;
 	run->kvm_dirty_regs = TEST_SYNC_FIELDS;
 	run->s.regs.regs.rbx = 0xBBBB;
-	rv = _vcpu_run(vm, VCPU_ID);
-	TEST_ASSERT(run->exit_reason == KVM_EXIT_IO,
-		    "Unexpected exit reason: %u (%s),\n",
-		    run->exit_reason,
-		    exit_reason_str(run->exit_reason));
+	rv = _vcpu_run(vcpu);
+	TEST_ASSERT_KVM_EXIT_REASON(vcpu, KVM_EXIT_IO);
 	TEST_ASSERT(run->s.regs.regs.rbx == 0xBBBB,
 		    "rbx sync regs value incorrect 0x%llx.",
 		    run->s.regs.regs.rbx);
-	vcpu_regs_get(vm, VCPU_ID, &regs);
+	vcpu_regs_get(vcpu, &regs);
 	TEST_ASSERT(regs.rbx == 0xBBBB + 1,
 		    "rbx guest value incorrect 0x%llx.",
 		    regs.rbx);
 
 	kvm_vm_free(vm);
+
+	race_sync_regs(race_sregs_cr4);
+	race_sync_regs(race_events_exc);
+	race_sync_regs(race_events_inj_pen);
 
 	return 0;
 }

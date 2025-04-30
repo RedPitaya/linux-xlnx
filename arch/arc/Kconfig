@@ -20,35 +20,37 @@ config ARC
 	select COMMON_CLK
 	select DMA_DIRECT_REMAP
 	select GENERIC_ATOMIC64 if !ISA_ARCV2 || !(ARC_HAS_LL64 && ARC_HAS_LLSC)
-	select GENERIC_FIND_FIRST_BIT
 	# for now, we don't need GENERIC_IRQ_PROBE, CONFIG_GENERIC_IRQ_CHIP
 	select GENERIC_IRQ_SHOW
 	select GENERIC_PCI_IOMAP
 	select GENERIC_PENDING_IRQ if SMP
 	select GENERIC_SCHED_CLOCK
 	select GENERIC_SMP_IDLE_THREAD
+	select GENERIC_IOREMAP
+	select GENERIC_STRNCPY_FROM_USER if MMU
+	select GENERIC_STRNLEN_USER if MMU
 	select HAVE_ARCH_KGDB
 	select HAVE_ARCH_TRACEHOOK
 	select HAVE_ARCH_TRANSPARENT_HUGEPAGE if ARC_MMU_V4
 	select HAVE_DEBUG_STACKOVERFLOW
 	select HAVE_DEBUG_KMEMLEAK
-	select HAVE_FUTEX_CMPXCHG if FUTEX
 	select HAVE_IOREMAP_PROT
 	select HAVE_KERNEL_GZIP
 	select HAVE_KERNEL_LZMA
 	select HAVE_KPROBES
 	select HAVE_KRETPROBES
+	select HAVE_REGS_AND_STACK_ACCESS_API
 	select HAVE_MOD_ARCH_SPECIFIC
 	select HAVE_PERF_EVENTS
-	select HANDLE_DOMAIN_IRQ
+	select HAVE_SYSCALL_TRACEPOINTS
 	select IRQ_DOMAIN
+	select LOCK_MM_AND_FIND_VMA
 	select MODULES_USE_ELF_RELA
 	select OF
 	select OF_EARLY_FLATTREE
 	select PCI_SYSCALL if PCI
 	select PERF_USE_VMALLOC if ARC_CACHE_VIPT_ALIASING
 	select HAVE_ARCH_JUMP_LABEL if ISA_ARCV2 && !CPU_ENDIAN_BE32
-	select SET_FS
 	select TRACE_IRQFLAGS_SUPPORT
 
 config LOCKDEP_SUPPORT
@@ -491,11 +493,11 @@ config ARC_KVADDR_SIZE
 	  kernel-user gutter)
 
 config ARC_CURR_IN_REG
-	bool "Dedicate Register r25 for current_task pointer"
+	bool "cache current task pointer in gp"
 	default y
 	help
-	  This reserved Register R25 to point to Current Task in
-	  kernel mode. This saves memory access for each such access
+	  This reserves gp register to point to Current Task in
+	  kernel mode eliding memory access for each access
 
 
 config ARC_EMUL_UNALIGNED
@@ -556,9 +558,9 @@ config ARC_BUILTIN_DTB_NAME
 
 endmenu	 # "ARC Architecture Configuration"
 
-config FORCE_MAX_ZONEORDER
+config ARCH_FORCE_MAX_ORDER
 	int "Maximum zone order"
-	default "12" if ARC_HUGEPAGE_16M
-	default "11"
+	default "11" if ARC_HUGEPAGE_16M
+	default "10"
 
 source "kernel/power/Kconfig"

@@ -634,7 +634,6 @@ static void node_reduce(struct sparsebit *s, struct node *nodep)
 				tmp = node_prev(s, nodep);
 
 			node_rm(s, nodep);
-			nodep = NULL;
 
 			nodep = tmp;
 			reduction_performed = true;
@@ -1866,7 +1865,7 @@ void sparsebit_validate_internal(struct sparsebit *s)
 		 * of total bits set.
 		 */
 		if (s->num_set != total_bits_set) {
-			fprintf(stderr, "Number of bits set missmatch,\n"
+			fprintf(stderr, "Number of bits set mismatch,\n"
 				"  s->num_set: 0x%lx total_bits_set: 0x%lx",
 				s->num_set, total_bits_set);
 

@@ -6,23 +6,39 @@
 #include <linux/of_net.h>
 #include <linux/mtd/mtd.h>
 #include <linux/mtd/partitions.h>
+#include <linux/nvmem-consumer.h>
 #include <linux/etherdevice.h>
 #include "mt76.h"
 
-int mt76_get_of_eeprom(struct mt76_dev *dev, void *eep, int offset, int len)
+static int mt76_get_of_eeprom_data(struct mt76_dev *dev, void *eep, int len)
 {
-#if defined(CONFIG_OF) && defined(CONFIG_MTD)
+	struct device_node *np = dev->dev->of_node;
+	const void *data;
+	int size;
+
+	data = of_get_property(np, "mediatek,eeprom-data", &size);
+	if (!data)
+		return -ENOENT;
+
+	if (size > len)
+		return -EINVAL;
+
+	memcpy(eep, data, size);
+
+	return 0;
+}
+
+static int mt76_get_of_epprom_from_mtd(struct mt76_dev *dev, void *eep, int offset, int len)
+{
+#ifdef CONFIG_MTD
 	struct device_node *np = dev->dev->of_node;
 	struct mtd_info *mtd;
 	const __be32 *list;
 	const char *part;
 	phandle phandle;
-	int size;
 	size_t retlen;
+	int size;
 	int ret;
-
-	if (!np)
-		return -ENOENT;
 
 	list = of_get_property(np, "mediatek,mtd-eeprom", &size);
 	if (!list)
@@ -54,8 +70,13 @@ int mt76_get_of_eeprom(struct mt76_dev *dev, void *eep, int offset, int len)
 	offset = be32_to_cpup(list);
 	ret = mtd_read(mtd, offset, len, &retlen, eep);
 	put_mtd_device(mtd);
-	if (ret)
+	if (mtd_is_bitflip(ret))
+		ret = 0;
+	if (ret) {
+		dev_err(dev->dev, "reading EEPROM from mtd %s failed: %i\n",
+			part, ret);
 		goto out_put_node;
+	}
 
 	if (retlen < len) {
 		ret = -EINVAL;
@@ -83,6 +104,56 @@ out_put_node:
 #else
 	return -ENOENT;
 #endif
+}
+
+static int mt76_get_of_epprom_from_nvmem(struct mt76_dev *dev, void *eep, int len)
+{
+	struct device_node *np = dev->dev->of_node;
+	struct nvmem_cell *cell;
+	const void *data;
+	size_t retlen;
+	int ret = 0;
+
+	cell = of_nvmem_cell_get(np, "eeprom");
+	if (IS_ERR(cell))
+		return PTR_ERR(cell);
+
+	data = nvmem_cell_read(cell, &retlen);
+	nvmem_cell_put(cell);
+
+	if (IS_ERR(data))
+		return PTR_ERR(data);
+
+	if (retlen < len) {
+		ret = -EINVAL;
+		goto exit;
+	}
+
+	memcpy(eep, data, len);
+
+exit:
+	kfree(data);
+
+	return ret;
+}
+
+int mt76_get_of_eeprom(struct mt76_dev *dev, void *eep, int offset, int len)
+{
+	struct device_node *np = dev->dev->of_node;
+	int ret;
+
+	if (!np)
+		return -ENOENT;
+
+	ret = mt76_get_of_eeprom_data(dev, eep, len);
+	if (!ret)
+		return 0;
+
+	ret = mt76_get_of_epprom_from_mtd(dev, eep, offset, len);
+	if (!ret)
+		return 0;
+
+	return mt76_get_of_epprom_from_nvmem(dev, eep, len);
 }
 EXPORT_SYMBOL_GPL(mt76_get_of_eeprom);
 
@@ -122,6 +193,7 @@ mt76_find_power_limits_node(struct mt76_dev *dev)
 {
 	struct device_node *np = dev->dev->of_node;
 	const char *const region_names[] = {
+		[NL80211_DFS_UNSET] = "ww",
 		[NL80211_DFS_ETSI] = "etsi",
 		[NL80211_DFS_FCC] = "fcc",
 		[NL80211_DFS_JP] = "jp",
@@ -146,10 +218,13 @@ mt76_find_power_limits_node(struct mt76_dev *dev)
 		}
 
 		if (mt76_string_prop_find(country, dev->alpha2) ||
-		    mt76_string_prop_find(regd, region_name))
+		    mt76_string_prop_find(regd, region_name)) {
+			of_node_put(np);
 			return cur;
+		}
 	}
 
+	of_node_put(np);
 	return fallback;
 }
 
@@ -284,6 +359,9 @@ s8 mt76_get_rate_power_limits(struct mt76_phy *phy,
 		break;
 	case NL80211_BAND_5GHZ:
 		band = '5';
+		break;
+	case NL80211_BAND_6GHZ:
+		band = '6';
 		break;
 	default:
 		return target_power;

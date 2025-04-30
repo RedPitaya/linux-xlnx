@@ -481,7 +481,7 @@ static int anfc_read_page_hw_ecc(struct nand_chip *chip, u8 *buf,
 		}
 
 		bf = nand_check_erased_ecc_chunk(raw_buf, chip->ecc.size,
-						 NULL, 0, NULL, 0,
+						 anand->hw_ecc, chip->ecc.bytes, NULL, 0,
 						 chip->ecc.strength);
 		if (bf > 0) {
 			mtd->ecc_stats.corrected += bf;
@@ -515,6 +515,7 @@ static int anfc_write_page_hw_ecc(struct nand_chip *chip, const u8 *buf,
 	struct mtd_info *mtd = nand_to_mtd(chip);
 	unsigned int len = mtd->writesize + (oob_required ? mtd->oobsize : 0);
 	dma_addr_t dma_addr;
+	u8 status;
 	int ret;
 	struct anfc_op nfc_op = {
 		.pkt_reg =
@@ -561,10 +562,21 @@ static int anfc_write_page_hw_ecc(struct nand_chip *chip, const u8 *buf,
 	}
 
 	/* Spare data is not protected */
-	if (oob_required)
+	if (oob_required) {
 		ret = nand_write_oob_std(chip, page);
+		if (ret)
+			return ret;
+	}
 
-	return ret;
+	/* Check write status on the chip side */
+	ret = nand_status_op(chip, &status);
+	if (ret)
+		return ret;
+
+	if (status & NAND_STATUS_FAIL)
+		return -EIO;
+
+	return 0;
 }
 
 static int anfc_sel_write_page_hw_ecc(struct nand_chip *chip, const u8 *buf,
@@ -891,7 +903,6 @@ static const struct nand_op_parser anfc_op_parser = NAND_OP_PARSER(
 static int anfc_check_op(struct nand_chip *chip,
 			 const struct nand_operation *op)
 {
-	struct mtd_info *mtd = nand_to_mtd(chip);
 	const struct nand_op_instr *instr;
 	int op_id;
 
@@ -916,7 +927,7 @@ static int anfc_check_op(struct nand_chip *chip,
 			if (instr->ctx.data.len > ANFC_MAX_CHUNK_SIZE)
 				return -ENOTSUPP;
 
-			if (anfc_pkt_len_config(instr->ctx.data.len, 0, 0))
+			if (anfc_pkt_len_config(instr->ctx.data.len, NULL, NULL))
 				return -ENOTSUPP;
 
 			break;
@@ -940,35 +951,6 @@ static int anfc_check_op(struct nand_chip *chip,
 	    op->instrs[0].ctx.cmd.opcode != NAND_CMD_STATUS &&
 	    op->instrs[1].type == NAND_OP_DATA_IN_INSTR)
 		return -ENOTSUPP;
-
-	/*
-	 * The controller only supports data payload requests which are a
-	 * multiple of 4. This may confuse the core as the core could request a
-	 * given number of bytes and then another number of bytes without
-	 * re-synchronizing the pointer. In practice, most data accesses are
-	 * 4-byte aligned and thus this is not an issue in practice. However,
-	 * rounding up will not work if we reached the end of the device. Any
-	 * unaligned data request that ends at the device boundary would confuse
-	 * the controller and cannot be performed.
-	 *
-	 * TODO: The nand_op_parser framework should be extended to
-	 * support custom checks on DATA instructions.
-	 */
-	if (op->ninstrs == 4 &&
-	    op->instrs[0].type == NAND_OP_CMD_INSTR &&
-	    op->instrs[1].type == NAND_OP_ADDR_INSTR &&
-	    op->instrs[1].ctx.addr.naddrs == 2 &&
-	    op->instrs[2].type == NAND_OP_CMD_INSTR &&
-	    op->instrs[3].type == NAND_OP_DATA_IN_INSTR) {
-		unsigned int start_off, end_off;
-
-		start_off = (op->instrs[1].ctx.addr.addrs[1] << 8) +
-			    op->instrs[1].ctx.addr.addrs[0];
-		end_off = start_off + round_up(op->instrs[3].ctx.data.len, 4);
-
-		if (end_off >= mtd->writesize + mtd->oobsize)
-			return -ENOTSUPP;
-	}
 
 	return nand_op_parser_exec_op(chip, &anfc_op_parser, op, true);
 }
@@ -1470,57 +1452,36 @@ static int anfc_probe(struct platform_device *pdev)
 
 	anfc_reset(nfc);
 
-	nfc->controller_clk = devm_clk_get(&pdev->dev, "controller");
+	nfc->controller_clk = devm_clk_get_enabled(&pdev->dev, "controller");
 	if (IS_ERR(nfc->controller_clk))
 		return PTR_ERR(nfc->controller_clk);
 
-	nfc->bus_clk = devm_clk_get(&pdev->dev, "bus");
+	nfc->bus_clk = devm_clk_get_enabled(&pdev->dev, "bus");
 	if (IS_ERR(nfc->bus_clk))
 		return PTR_ERR(nfc->bus_clk);
 
-	ret = clk_prepare_enable(nfc->controller_clk);
+	ret = dma_set_mask(&pdev->dev, DMA_BIT_MASK(64));
 	if (ret)
 		return ret;
 
-	ret = clk_prepare_enable(nfc->bus_clk);
-	if (ret)
-		goto disable_controller_clk;
-
-	ret = dma_set_mask(&pdev->dev, DMA_BIT_MASK(64));
-	if (ret)
-		goto disable_bus_clk;
-
 	ret = anfc_parse_cs(nfc);
 	if (ret)
-		goto disable_bus_clk;
+		return ret;
 
 	ret = anfc_chips_init(nfc);
 	if (ret)
-		goto disable_bus_clk;
+		return ret;
 
 	platform_set_drvdata(pdev, nfc);
 
 	return 0;
-
-disable_bus_clk:
-	clk_disable_unprepare(nfc->bus_clk);
-
-disable_controller_clk:
-	clk_disable_unprepare(nfc->controller_clk);
-
-	return ret;
 }
 
-static int anfc_remove(struct platform_device *pdev)
+static void anfc_remove(struct platform_device *pdev)
 {
 	struct arasan_nfc *nfc = platform_get_drvdata(pdev);
 
 	anfc_chips_cleanup(nfc);
-
-	clk_disable_unprepare(nfc->bus_clk);
-	clk_disable_unprepare(nfc->controller_clk);
-
-	return 0;
 }
 
 static const struct of_device_id anfc_ids[] = {
@@ -1540,7 +1501,7 @@ static struct platform_driver anfc_driver = {
 		.of_match_table = anfc_ids,
 	},
 	.probe = anfc_probe,
-	.remove = anfc_remove,
+	.remove_new = anfc_remove,
 };
 module_platform_driver(anfc_driver);
 

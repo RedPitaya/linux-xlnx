@@ -65,7 +65,9 @@ static int nsim_set_coalesce(struct net_device *dev,
 }
 
 static void nsim_get_ringparam(struct net_device *dev,
-			       struct ethtool_ringparam *ring)
+			       struct ethtool_ringparam *ring,
+			       struct kernel_ethtool_ringparam *kernel_ring,
+			       struct netlink_ext_ack *extack)
 {
 	struct netdevsim *ns = netdev_priv(dev);
 
@@ -73,11 +75,40 @@ static void nsim_get_ringparam(struct net_device *dev,
 }
 
 static int nsim_set_ringparam(struct net_device *dev,
-			      struct ethtool_ringparam *ring)
+			      struct ethtool_ringparam *ring,
+			      struct kernel_ethtool_ringparam *kernel_ring,
+			      struct netlink_ext_ack *extack)
 {
 	struct netdevsim *ns = netdev_priv(dev);
 
-	memcpy(&ns->ethtool.ring, ring, sizeof(ns->ethtool.ring));
+	ns->ethtool.ring.rx_pending = ring->rx_pending;
+	ns->ethtool.ring.rx_jumbo_pending = ring->rx_jumbo_pending;
+	ns->ethtool.ring.rx_mini_pending = ring->rx_mini_pending;
+	ns->ethtool.ring.tx_pending = ring->tx_pending;
+	return 0;
+}
+
+static void
+nsim_get_channels(struct net_device *dev, struct ethtool_channels *ch)
+{
+	struct netdevsim *ns = netdev_priv(dev);
+
+	ch->max_combined = ns->nsim_bus_dev->num_queues;
+	ch->combined_count = ns->ethtool.channels;
+}
+
+static int
+nsim_set_channels(struct net_device *dev, struct ethtool_channels *ch)
+{
+	struct netdevsim *ns = netdev_priv(dev);
+	int err;
+
+	err = netif_set_real_num_queues(dev, ch->combined_count,
+					ch->combined_count);
+	if (err)
+		return err;
+
+	ns->ethtool.channels = ch->combined_count;
 	return 0;
 }
 
@@ -109,6 +140,16 @@ nsim_set_fecparam(struct net_device *dev, struct ethtool_fecparam *fecparam)
 	return 0;
 }
 
+static int nsim_get_ts_info(struct net_device *dev,
+			    struct ethtool_ts_info *info)
+{
+	struct netdevsim *ns = netdev_priv(dev);
+
+	info->phc_index = mock_phc_index(ns->phc);
+
+	return 0;
+}
+
 static const struct ethtool_ops nsim_ethtool_ops = {
 	.supported_coalesce_params	= ETHTOOL_COALESCE_ALL_PARAMS,
 	.get_pause_stats	        = nsim_get_pause_stats,
@@ -118,8 +159,11 @@ static const struct ethtool_ops nsim_ethtool_ops = {
 	.get_coalesce			= nsim_get_coalesce,
 	.get_ringparam			= nsim_get_ringparam,
 	.set_ringparam			= nsim_set_ringparam,
+	.get_channels			= nsim_get_channels,
+	.set_channels			= nsim_set_channels,
 	.get_fecparam			= nsim_get_fecparam,
 	.set_fecparam			= nsim_set_fecparam,
+	.get_ts_info			= nsim_get_ts_info,
 };
 
 static void nsim_ethtool_ring_init(struct netdevsim *ns)
@@ -140,6 +184,8 @@ void nsim_ethtool_init(struct netdevsim *ns)
 
 	ns->ethtool.fec.fec = ETHTOOL_FEC_NONE;
 	ns->ethtool.fec.active_fec = ETHTOOL_FEC_NONE;
+
+	ns->ethtool.channels = ns->nsim_bus_dev->num_queues;
 
 	ethtool = debugfs_create_dir("ethtool", ns->nsim_dev_port->ddir);
 

@@ -290,7 +290,6 @@ static void ia64_mlogbuf_finish(int wait)
 {
 	BREAK_LOGLEVEL(console_loglevel);
 
-	spin_lock_init(&mlogbuf_rlock);
 	ia64_mlogbuf_dump();
 	printk(KERN_EMERG "mlogbuf_finish: printing switched to urgent mode, "
 		"MCA/INIT might be dodgy or fail.\n");
@@ -1631,10 +1630,10 @@ default_monarch_init_process(struct notifier_block *self, unsigned long val, voi
 	}
 	printk("\n\n");
 	if (read_trylock(&tasklist_lock)) {
-		do_each_thread (g, t) {
+		for_each_process_thread(g, t) {
 			printk("\nBacktrace of pid %d (%s)\n", t->pid, t->comm);
 			show_stack(t, NULL, KERN_DEFAULT);
-		} while_each_thread (g, t);
+		}
 		read_unlock(&tasklist_lock);
 	}
 	/* FIXME: This will not restore zapped printk locks. */
@@ -1794,7 +1793,7 @@ format_mca_init_stack(void *mca_data, unsigned long offset,
 	p->parent = p->real_parent = p->group_leader = p;
 	INIT_LIST_HEAD(&p->children);
 	INIT_LIST_HEAD(&p->sibling);
-	strncpy(p->comm, type, sizeof(p->comm)-1);
+	strscpy(p->comm, type, sizeof(p->comm)-1);
 }
 
 /* Caller prevents this from being called after init */

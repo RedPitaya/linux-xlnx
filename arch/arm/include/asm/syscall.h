@@ -25,6 +25,9 @@ static inline int syscall_get_nr(struct task_struct *task,
 	if (IS_ENABLED(CONFIG_AEABI) && !IS_ENABLED(CONFIG_OABI_COMPAT))
 		return task_thread_info(task)->abi_syscall;
 
+	if (task_thread_info(task)->abi_syscall == -1)
+		return -1;
+
 	return task_thread_info(task)->abi_syscall & __NR_SYSCALL_MASK;
 }
 
@@ -75,16 +78,6 @@ static inline void syscall_get_arguments(struct task_struct *task,
 	args++;
 
 	memcpy(args, &regs->ARM_r0 + 1, 5 * sizeof(args[0]));
-}
-
-static inline void syscall_set_arguments(struct task_struct *task,
-					 struct pt_regs *regs,
-					 const unsigned long *args)
-{
-	regs->ARM_ORIG_r0 = args[0];
-	args++;
-
-	memcpy(&regs->ARM_r0 + 1, args, 5 * sizeof(args[0]));
 }
 
 static inline int syscall_get_arch(struct task_struct *task)

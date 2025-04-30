@@ -4,7 +4,7 @@
  *
  * (C) Copyright 2021, Xilinx, Inc.
  *
- * Michal Simek <michal.simek@xilinx.com>
+ * Michal Simek <michal.simek@amd.com>
  */
 
 #include "versal.dtsi"
@@ -21,12 +21,13 @@
 	};
 
 	chosen {
-		bootargs = "console=ttyAMA0 earlycon=pl011,mmio32,0xFF000000,115200n8 clk_ignore_unused";
+		bootargs = "console=ttyAMA0 earlycon=pl011,mmio32,0xFF000000,115200n8";
 		stdout-path = "serial0:115200";
 	};
 
 	aliases {
 		serial0 = &serial0;
+		serial2 = &dcc;
 		ethernet0 = &gem0;
 		i2c0 = &i2c0;
 		i2c1 = &i2c1;
@@ -40,8 +41,7 @@
 
 &qspi { /* PMC_MIO_500 0 - 12 */
 	status = "okay"; /* u93 and u92 */
-	num-cs = <1>;
-	is-dual = <1>;
+	num-cs = <2>;
 	spi-rx-bus-width = <4>;
 	spi-tx-bus-width = <4>;
 
@@ -49,7 +49,8 @@
 		compatible = "m25p80", "jedec,spi-nor";
 		#address-cells = <1>;
 		#size-cells = <1>;
-		reg = <0>;
+		reg = <0>, <1>;
+		parallel-memories = /bits/ 64 <0x8000000 0x8000000>; /* 128MB */
 		spi-tx-bus-width = <4>;
 		spi-rx-bus-width = <4>;
 		spi-max-frequency = <35000000>;
@@ -62,8 +63,6 @@
 
 &usb0 { /* PMC_MIO_500 13 - 25 USB 2.0 */
 	status = "okay";
-	xlnx,usb-polarity = <0>;
-	xlnx,usb-reset-mode = <0>;
 };
 
 &dwc3_0 { /* USB 2.0 host */
@@ -92,18 +91,16 @@
 
 &i2c0 { /* PMC_MIO46/47 */
 	status = "okay";
-	clock-frequency = <400000>;
 };
 
 &i2c1 { /* PMC_MIO44/45 */
 	status = "okay";
-	clock-frequency = <400000>;
 
 	/* Use for storing information about board */
 	eeprom: eeprom@54 { /* u34 - m24128 16kB */
 		compatible = "st,24c128", "atmel,24c128";
 		reg = <0x54>; /* & 0x5c */
-		u-boot,dm-pre-reloc;
+		bootph-all;
 	};
 };
 
@@ -113,12 +110,18 @@
 	status = "okay";
 	phy-handle = <&phy1>; /* u198 */
 	phy-mode = "rgmii-id";
-	phy1: phy@1 {
-		reg = <1>;
-		ti,rx-internal-delay = <0xb>;
-		ti,tx-internal-delay = <0xa>;
-		ti,fifo-depth = <1>;
-		ti,dp83867-rxctrl-strap-quirk;
+	mdio: mdio {
+		#address-cells = <1>;
+		#size-cells = <0>;
+		phy1: phy@1 {
+			#phy-cells = <1>;
+			compatible = "ethernet-phy-id2000.a231";
+			reg = <1>;
+			ti,rx-internal-delay = <0xb>;
+			ti,tx-internal-delay = <0xa>;
+			ti,fifo-depth = <1>;
+			ti,dp83867-rxctrl-strap-quirk;
+		};
 	};
 };
 

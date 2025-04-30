@@ -15,12 +15,12 @@
 #include <linux/interrupt.h>
 #include <linux/platform_device.h>
 #include <linux/apm-emulation.h>
+#include <linux/spi/corgi_lcd.h>
 
 #include <asm/irq.h>
 #include <asm/mach-types.h>
-#include <mach/hardware.h>
 
-#include <mach/spitz.h>
+#include "spitz.h"
 #include "pxa27x.h"
 #include "sharpsl_pm.h"
 
@@ -167,7 +167,7 @@ static bool spitz_charger_wakeup(void)
 		gpio_get_value(SPITZ_GPIO_SYNC);
 }
 
-unsigned long spitzpm_read_devdata(int type)
+static unsigned long spitzpm_read_devdata(int type)
 {
 	switch (type) {
 	case SHARPSL_STATUS_ACIN:

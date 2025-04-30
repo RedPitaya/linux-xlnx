@@ -21,6 +21,7 @@
  * DEALINGS IN THE SOFTWARE.
  */
 
+#include <drm/display/drm_dp.h>
 #include <linux/bitops.h>
 #include <linux/bug.h>
 #include <linux/errno.h>
@@ -59,7 +60,7 @@ void hdmi_avi_infoframe_init(struct hdmi_avi_infoframe *frame)
 	memset(frame, 0, sizeof(*frame));
 
 	frame->type = HDMI_INFOFRAME_TYPE_AVI;
-	frame->version = 2;
+	frame->version = 3;
 	frame->length = HDMI_AVI_INFOFRAME_SIZE;
 }
 EXPORT_SYMBOL(hdmi_avi_infoframe_init);
@@ -67,7 +68,7 @@ EXPORT_SYMBOL(hdmi_avi_infoframe_init);
 static int hdmi_avi_infoframe_check_only(const struct hdmi_avi_infoframe *frame)
 {
 	if (frame->type != HDMI_INFOFRAME_TYPE_AVI ||
-	    frame->version != 2 ||
+	    frame->version != 3 ||
 	    frame->length != HDMI_AVI_INFOFRAME_SIZE)
 		return -EINVAL;
 
@@ -159,7 +160,7 @@ ssize_t hdmi_avi_infoframe_pack_only(const struct hdmi_avi_infoframe *frame,
 	if (frame->itc)
 		ptr[2] |= BIT(7);
 
-	ptr[3] = frame->video_code & 0x7f;
+	ptr[3] = frame->video_code & 0xff;
 
 	ptr[4] = ((frame->ycc_quantization_range & 0x3) << 6) |
 		 ((frame->content_type & 0x3) << 4) |
@@ -381,11 +382,33 @@ static int hdmi_audio_infoframe_check_only(const struct hdmi_audio_infoframe *fr
  *
  * Returns 0 on success or a negative error code on failure.
  */
-int hdmi_audio_infoframe_check(struct hdmi_audio_infoframe *frame)
+int hdmi_audio_infoframe_check(const struct hdmi_audio_infoframe *frame)
 {
 	return hdmi_audio_infoframe_check_only(frame);
 }
 EXPORT_SYMBOL(hdmi_audio_infoframe_check);
+
+static void
+hdmi_audio_infoframe_pack_payload(const struct hdmi_audio_infoframe *frame,
+				  u8 *buffer)
+{
+	u8 channels;
+
+	if (frame->channels >= 2)
+		channels = frame->channels - 1;
+	else
+		channels = 0;
+
+	buffer[0] = ((frame->coding_type & 0xf) << 4) | (channels & 0x7);
+	buffer[1] = ((frame->sample_frequency & 0x7) << 2) |
+		 (frame->sample_size & 0x3);
+	buffer[2] = frame->coding_type_ext & 0x1f;
+	buffer[3] = frame->channel_allocation;
+	buffer[4] = (frame->level_shift_value & 0xf) << 3;
+
+	if (frame->downmix_inhibit)
+		buffer[4] |= BIT(7);
+}
 
 /**
  * hdmi_audio_infoframe_pack_only() - write HDMI audio infoframe to binary buffer
@@ -404,7 +427,6 @@ EXPORT_SYMBOL(hdmi_audio_infoframe_check);
 ssize_t hdmi_audio_infoframe_pack_only(const struct hdmi_audio_infoframe *frame,
 				       void *buffer, size_t size)
 {
-	unsigned char channels;
 	u8 *ptr = buffer;
 	size_t length;
 	int ret;
@@ -420,28 +442,13 @@ ssize_t hdmi_audio_infoframe_pack_only(const struct hdmi_audio_infoframe *frame,
 
 	memset(buffer, 0, size);
 
-	if (frame->channels >= 2)
-		channels = frame->channels - 1;
-	else
-		channels = 0;
-
 	ptr[0] = frame->type;
 	ptr[1] = frame->version;
 	ptr[2] = frame->length;
 	ptr[3] = 0; /* checksum */
 
-	/* start infoframe payload */
-	ptr += HDMI_INFOFRAME_HEADER_SIZE;
-
-	ptr[0] = ((frame->coding_type & 0xf) << 4) | (channels & 0x7);
-	ptr[1] = ((frame->sample_frequency & 0x7) << 2) |
-		 (frame->sample_size & 0x3);
-	ptr[2] = frame->coding_type_ext & 0x1f;
-	ptr[3] = frame->channel_allocation;
-	ptr[4] = (frame->level_shift_value & 0xf) << 3;
-
-	if (frame->downmix_inhibit)
-		ptr[4] |= BIT(7);
+	hdmi_audio_infoframe_pack_payload(frame,
+					  ptr + HDMI_INFOFRAME_HEADER_SIZE);
 
 	hdmi_infoframe_set_checksum(buffer, length);
 
@@ -478,6 +485,43 @@ ssize_t hdmi_audio_infoframe_pack(struct hdmi_audio_infoframe *frame,
 	return hdmi_audio_infoframe_pack_only(frame, buffer, size);
 }
 EXPORT_SYMBOL(hdmi_audio_infoframe_pack);
+
+/**
+ * hdmi_audio_infoframe_pack_for_dp - Pack a HDMI Audio infoframe for DisplayPort
+ *
+ * @frame:      HDMI Audio infoframe
+ * @sdp:        Secondary data packet for DisplayPort.
+ * @dp_version: DisplayPort version to be encoded in the header
+ *
+ * Packs a HDMI Audio Infoframe to be sent over DisplayPort. This function
+ * fills the secondary data packet to be used for DisplayPort.
+ *
+ * Return: Number of total written bytes or a negative errno on failure.
+ */
+ssize_t
+hdmi_audio_infoframe_pack_for_dp(const struct hdmi_audio_infoframe *frame,
+				 struct dp_sdp *sdp, u8 dp_version)
+{
+	int ret;
+
+	ret = hdmi_audio_infoframe_check(frame);
+	if (ret)
+		return ret;
+
+	memset(sdp->db, 0, sizeof(sdp->db));
+
+	/* Secondary-data packet header */
+	sdp->sdp_header.HB0 = 0;
+	sdp->sdp_header.HB1 = frame->type;
+	sdp->sdp_header.HB2 = DP_SDP_AUDIO_INFOFRAME_HB2;
+	sdp->sdp_header.HB3 = (dp_version & 0x3f) << 2;
+
+	hdmi_audio_infoframe_pack_payload(frame, sdp->db);
+
+	/* Return size =  frame length + four HB for sdp_header */
+	return frame->length + 4;
+}
+EXPORT_SYMBOL(hdmi_audio_infoframe_pack_for_dp);
 
 /**
  * hdmi_vendor_infoframe_init() - initialize an HDMI vendor infoframe
@@ -1591,7 +1635,7 @@ static int hdmi_avi_infoframe_unpack(struct hdmi_avi_infoframe *frame,
 	frame->quantization_range = (ptr[2] >> 2) & 0x3;
 	frame->nups = ptr[2] & 0x3;
 
-	frame->video_code = ptr[3] & 0x7f;
+	frame->video_code = ptr[3] & 0xff;
 	frame->ycc_quantization_range = (ptr[4] >> 6) & 0x3;
 	frame->content_type = (ptr[4] >> 4) & 0x3;
 

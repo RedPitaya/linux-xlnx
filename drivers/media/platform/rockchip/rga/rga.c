@@ -76,10 +76,7 @@ static irqreturn_t rga_isr(int irq, void *prv)
 		WARN_ON(!src);
 		WARN_ON(!dst);
 
-		dst->timecode = src->timecode;
-		dst->vb2_buf.timestamp = src->vb2_buf.timestamp;
-		dst->flags &= ~V4L2_BUF_FLAG_TSTAMP_SRC_MASK;
-		dst->flags |= src->flags & V4L2_BUF_FLAG_TSTAMP_SRC_MASK;
+		v4l2_m2m_buf_copy_metadata(src, dst, true);
 
 		v4l2_m2m_buf_done(src, VB2_BUF_STATE_DONE);
 		v4l2_m2m_buf_done(dst, VB2_BUF_STATE_DONE);
@@ -726,10 +723,10 @@ static int rga_enable_clocks(struct rockchip_rga *rga)
 
 	return 0;
 
-err_disable_sclk:
-	clk_disable_unprepare(rga->sclk);
 err_disable_aclk:
 	clk_disable_unprepare(rga->aclk);
+err_disable_sclk:
+	clk_disable_unprepare(rga->sclk);
 
 	return ret;
 }
@@ -800,7 +797,6 @@ static int rga_probe(struct platform_device *pdev)
 {
 	struct rockchip_rga *rga;
 	struct video_device *vfd;
-	struct resource *res;
 	int ret = 0;
 	int irq;
 
@@ -817,13 +813,11 @@ static int rga_probe(struct platform_device *pdev)
 
 	ret = rga_parse_dt(rga);
 	if (ret)
-		dev_err(&pdev->dev, "Unable to parse OF data\n");
+		return dev_err_probe(&pdev->dev, ret, "Unable to parse OF data\n");
 
 	pm_runtime_enable(rga->dev);
 
-	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
-
-	rga->regs = devm_ioremap_resource(rga->dev, res);
+	rga->regs = devm_platform_ioremap_resource(pdev, 0);
 	if (IS_ERR(rga->regs)) {
 		ret = PTR_ERR(rga->regs);
 		goto err_put_clk;
@@ -868,7 +862,7 @@ static int rga_probe(struct platform_device *pdev)
 
 	ret = pm_runtime_resume_and_get(rga->dev);
 	if (ret < 0)
-		goto rel_vdev;
+		goto rel_m2m;
 
 	rga->version.major = (rga_read(rga, RGA_VERSION_INFO) >> 24) & 0xFF;
 	rga->version.minor = (rga_read(rga, RGA_VERSION_INFO) >> 20) & 0x0F;
@@ -884,7 +878,7 @@ static int rga_probe(struct platform_device *pdev)
 					   DMA_ATTR_WRITE_COMBINE);
 	if (!rga->cmdbuf_virt) {
 		ret = -ENOMEM;
-		goto rel_vdev;
+		goto rel_m2m;
 	}
 
 	rga->src_mmu_pages =
@@ -895,7 +889,7 @@ static int rga_probe(struct platform_device *pdev)
 	}
 	rga->dst_mmu_pages =
 		(unsigned int *)__get_free_pages(GFP_KERNEL | __GFP_ZERO, 3);
-	if (rga->dst_mmu_pages) {
+	if (!rga->dst_mmu_pages) {
 		ret = -ENOMEM;
 		goto free_src_pages;
 	}
@@ -921,6 +915,8 @@ free_src_pages:
 free_dma:
 	dma_free_attrs(rga->dev, RGA_CMDBUF_SIZE, rga->cmdbuf_virt,
 		       rga->cmdbuf_phy, DMA_ATTR_WRITE_COMBINE);
+rel_m2m:
+	v4l2_m2m_release(rga->m2m_dev);
 rel_vdev:
 	video_device_release(vfd);
 unreg_v4l2_dev:
@@ -931,7 +927,7 @@ err_put_clk:
 	return ret;
 }
 
-static int rga_remove(struct platform_device *pdev)
+static void rga_remove(struct platform_device *pdev)
 {
 	struct rockchip_rga *rga = platform_get_drvdata(pdev);
 
@@ -948,8 +944,6 @@ static int rga_remove(struct platform_device *pdev)
 	v4l2_device_unregister(&rga->v4l2_dev);
 
 	pm_runtime_disable(rga->dev);
-
-	return 0;
 }
 
 static int __maybe_unused rga_runtime_suspend(struct device *dev)
@@ -987,7 +981,7 @@ MODULE_DEVICE_TABLE(of, rockchip_rga_match);
 
 static struct platform_driver rga_pdrv = {
 	.probe = rga_probe,
-	.remove = rga_remove,
+	.remove_new = rga_remove,
 	.driver = {
 		.name = RGA_NAME,
 		.pm = &rga_pm,

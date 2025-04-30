@@ -44,7 +44,8 @@ struct list_head audit_filter_list[AUDIT_NR_FILTERS] = {
 	LIST_HEAD_INIT(audit_filter_list[4]),
 	LIST_HEAD_INIT(audit_filter_list[5]),
 	LIST_HEAD_INIT(audit_filter_list[6]),
-#if AUDIT_NR_FILTERS != 7
+	LIST_HEAD_INIT(audit_filter_list[7]),
+#if AUDIT_NR_FILTERS != 8
 #error Fix audit_filter_list initialiser
 #endif
 };
@@ -56,6 +57,7 @@ static struct list_head audit_rules_list[AUDIT_NR_FILTERS] = {
 	LIST_HEAD_INIT(audit_rules_list[4]),
 	LIST_HEAD_INIT(audit_rules_list[5]),
 	LIST_HEAD_INIT(audit_rules_list[6]),
+	LIST_HEAD_INIT(audit_rules_list[7]),
 };
 
 DEFINE_MUTEX(audit_filter_mutex);
@@ -151,7 +153,8 @@ char *audit_unpack_string(void **bufp, size_t *remain, size_t len)
 static inline int audit_to_inode(struct audit_krule *krule,
 				 struct audit_field *f)
 {
-	if (krule->listnr != AUDIT_FILTER_EXIT ||
+	if ((krule->listnr != AUDIT_FILTER_EXIT &&
+	     krule->listnr != AUDIT_FILTER_URING_EXIT) ||
 	    krule->inode_f || krule->watch || krule->tree ||
 	    (f->op != Audit_equal && f->op != Audit_not_equal))
 		return -EINVAL;
@@ -218,7 +221,7 @@ static int audit_match_signal(struct audit_entry *entry)
 					       entry->rule.mask));
 	}
 
-	switch(audit_classify_arch(arch->val)) {
+	switch (audit_classify_arch(arch->val)) {
 	case 0: /* native */
 		return (audit_match_class_bits(AUDIT_CLASS_SIGNAL,
 					       entry->rule.mask));
@@ -240,7 +243,7 @@ static inline struct audit_entry *audit_to_entry_common(struct audit_rule_data *
 
 	err = -EINVAL;
 	listnr = rule->flags & ~AUDIT_FILTER_PREPEND;
-	switch(listnr) {
+	switch (listnr) {
 	default:
 		goto exit_err;
 #ifdef CONFIG_AUDITSYSCALL
@@ -248,6 +251,7 @@ static inline struct audit_entry *audit_to_entry_common(struct audit_rule_data *
 		pr_err("AUDIT_FILTER_ENTRY is deprecated\n");
 		goto exit_err;
 	case AUDIT_FILTER_EXIT:
+	case AUDIT_FILTER_URING_EXIT:
 	case AUDIT_FILTER_TASK:
 #endif
 	case AUDIT_FILTER_USER:
@@ -332,11 +336,15 @@ static int audit_field_valid(struct audit_entry *entry, struct audit_field *f)
 		if (entry->rule.listnr != AUDIT_FILTER_FS)
 			return -EINVAL;
 		break;
+	case AUDIT_PERM:
+		if (entry->rule.listnr == AUDIT_FILTER_URING_EXIT)
+			return -EINVAL;
+		break;
 	}
 
 	switch (entry->rule.listnr) {
 	case AUDIT_FILTER_FS:
-		switch(f->type) {
+		switch (f->type) {
 		case AUDIT_FSTYPE:
 		case AUDIT_FILTERKEY:
 			break;
@@ -629,7 +637,7 @@ static struct audit_rule_data *audit_krule_to_data(struct audit_krule *krule)
 	void *bufp;
 	int i;
 
-	data = kmalloc(sizeof(*data) + krule->buflen, GFP_KERNEL);
+	data = kmalloc(struct_size(data, buf, krule->buflen), GFP_KERNEL);
 	if (unlikely(!data))
 		return NULL;
 	memset(data, 0, sizeof(*data));
@@ -643,7 +651,7 @@ static struct audit_rule_data *audit_krule_to_data(struct audit_krule *krule)
 
 		data->fields[i] = f->type;
 		data->fieldflags[i] = audit_ops[f->op];
-		switch(f->type) {
+		switch (f->type) {
 		case AUDIT_SUBJ_USER:
 		case AUDIT_SUBJ_ROLE:
 		case AUDIT_SUBJ_TYPE:
@@ -686,7 +694,8 @@ static struct audit_rule_data *audit_krule_to_data(struct audit_krule *krule)
 			data->values[i] = f->val;
 		}
 	}
-	for (i = 0; i < AUDIT_BITMASK_SIZE; i++) data->mask[i] = krule->mask[i];
+	for (i = 0; i < AUDIT_BITMASK_SIZE; i++)
+		data->mask[i] = krule->mask[i];
 
 	return data;
 }
@@ -709,7 +718,7 @@ static int audit_compare_rule(struct audit_krule *a, struct audit_krule *b)
 		    a->fields[i].op != b->fields[i].op)
 			return 1;
 
-		switch(a->fields[i].type) {
+		switch (a->fields[i].type) {
 		case AUDIT_SUBJ_USER:
 		case AUDIT_SUBJ_ROLE:
 		case AUDIT_SUBJ_TYPE:
@@ -938,7 +947,7 @@ static inline int audit_add_rule(struct audit_entry *entry)
 	int dont_count = 0;
 
 	/* If any of these, don't count towards total */
-	switch(entry->rule.listnr) {
+	switch (entry->rule.listnr) {
 	case AUDIT_FILTER_USER:
 	case AUDIT_FILTER_EXCLUDE:
 	case AUDIT_FILTER_FS:
@@ -980,7 +989,8 @@ static inline int audit_add_rule(struct audit_entry *entry)
 	}
 
 	entry->rule.prio = ~0ULL;
-	if (entry->rule.listnr == AUDIT_FILTER_EXIT) {
+	if (entry->rule.listnr == AUDIT_FILTER_EXIT ||
+	    entry->rule.listnr == AUDIT_FILTER_URING_EXIT) {
 		if (entry->rule.flags & AUDIT_FILTER_PREPEND)
 			entry->rule.prio = ++prio_high;
 		else
@@ -1020,7 +1030,7 @@ int audit_del_rule(struct audit_entry *entry)
 	int dont_count = 0;
 
 	/* If any of these, don't count towards total */
-	switch(entry->rule.listnr) {
+	switch (entry->rule.listnr) {
 	case AUDIT_FILTER_USER:
 	case AUDIT_FILTER_EXCLUDE:
 	case AUDIT_FILTER_FS:
@@ -1074,7 +1084,7 @@ static void audit_list_rules(int seq, struct sk_buff_head *q)
 
 	/* This is a blocking read, so use audit_filter_mutex instead of rcu
 	 * iterator to sync with list writers. */
-	for (i=0; i<AUDIT_NR_FILTERS; i++) {
+	for (i = 0; i < AUDIT_NR_FILTERS; i++) {
 		list_for_each_entry(r, &audit_rules_list[i], list) {
 			struct audit_rule_data *data;
 
@@ -1083,7 +1093,7 @@ static void audit_list_rules(int seq, struct sk_buff_head *q)
 				break;
 			skb = audit_make_reply(seq, AUDIT_LIST_RULES, 0, 1,
 					       data,
-					       sizeof(*data) + data->buflen);
+					       struct_size(data, buf, data->buflen));
 			if (skb)
 				skb_queue_tail(q, skb);
 			kfree(data);
@@ -1359,8 +1369,7 @@ int audit_filter(int msgtype, unsigned int listtype)
 			case AUDIT_SUBJ_SEN:
 			case AUDIT_SUBJ_CLR:
 				if (f->lsm_rule) {
-					security_task_getsecid_subj(current,
-								    &sid);
+					security_current_getsecid_subj(&sid);
 					result = security_audit_rule_match(sid,
 						   f->type, f->op, f->lsm_rule);
 				}

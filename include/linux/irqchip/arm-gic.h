@@ -134,9 +134,6 @@ struct gic_chip_data;
 
 void gic_cascade_irq(unsigned int gic_nr, unsigned int irq);
 int gic_cpu_if_down(unsigned int gic_nr);
-void gic_ipi_send_mask(struct irq_data *d, const struct cpumask *mask);
-
-void gic_set_cpu(unsigned int cpu, unsigned int irq);
 void gic_cpu_save(struct gic_chip_data *gic);
 void gic_cpu_restore(struct gic_chip_data *gic);
 void gic_dist_save(struct gic_chip_data *gic);
@@ -153,12 +150,6 @@ int gic_of_init(struct device_node *node, struct device_node *parent);
  * the gic_chip_data structure is dynamically allocated.
  */
 int gic_of_init_child(struct device *dev, struct gic_chip_data **gic, int irq);
-
-/*
- * Legacy platforms not converted to DT yet must use this to init
- * their GIC
- */
-void gic_init(void __iomem *dist , void __iomem *cpu);
 
 void gic_send_sgi(unsigned int cpu_id, unsigned int irq);
 int gic_get_cpu_id(unsigned int cpu);

@@ -2023,7 +2023,7 @@ static void snd_riptide_joystick_remove(struct pci_dev *pci)
 #endif
 
 static int
-snd_card_riptide_probe(struct pci_dev *pci, const struct pci_device_id *pci_id)
+__snd_card_riptide_probe(struct pci_dev *pci, const struct pci_device_id *pci_id)
 {
 	static int dev;
 	struct snd_card *card;
@@ -2105,15 +2105,15 @@ snd_card_riptide_probe(struct pci_dev *pci, const struct pci_device_id *pci_id)
 	strcpy(card->driver, "RIPTIDE");
 	strcpy(card->shortname, "Riptide");
 #ifdef SUPPORT_JOYSTICK
-	snprintf(card->longname, sizeof(card->longname),
-		 "%s at 0x%lx, irq %i mpu 0x%x opl3 0x%x gameport 0x%x",
-		 card->shortname, chip->port, chip->irq, chip->mpuaddr,
-		 chip->opladdr, chip->gameaddr);
+	scnprintf(card->longname, sizeof(card->longname),
+		  "%s at 0x%lx, irq %i mpu 0x%x opl3 0x%x gameport 0x%x",
+		  card->shortname, chip->port, chip->irq, chip->mpuaddr,
+		  chip->opladdr, chip->gameaddr);
 #else
-	snprintf(card->longname, sizeof(card->longname),
-		 "%s at 0x%lx, irq %i mpu 0x%x opl3 0x%x",
-		 card->shortname, chip->port, chip->irq, chip->mpuaddr,
-		 chip->opladdr);
+	scnprintf(card->longname, sizeof(card->longname),
+		  "%s at 0x%lx, irq %i mpu 0x%x opl3 0x%x",
+		  card->shortname, chip->port, chip->irq, chip->mpuaddr,
+		  chip->opladdr);
 #endif
 	snd_riptide_proc_init(chip);
 	err = snd_card_register(card);
@@ -2122,6 +2122,12 @@ snd_card_riptide_probe(struct pci_dev *pci, const struct pci_device_id *pci_id)
 	pci_set_drvdata(pci, card);
 	dev++;
 	return 0;
+}
+
+static int
+snd_card_riptide_probe(struct pci_dev *pci, const struct pci_device_id *pci_id)
+{
+	return snd_card_free_on_error(&pci->dev, __snd_card_riptide_probe(pci, pci_id));
 }
 
 static struct pci_driver driver = {

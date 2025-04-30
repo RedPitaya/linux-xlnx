@@ -42,6 +42,16 @@
 #define CZ_PLAT_CLK 24000000
 
 static struct snd_soc_jack cz_jack;
+static struct snd_soc_jack_pin cz_jack_pins[] = {
+	{
+		.pin = "Headphones",
+		.mask = SND_JACK_HEADPHONE,
+	},
+	{
+		.pin = "Headset Mic",
+		.mask = SND_JACK_MICROPHONE,
+	},
+};
 
 static int cz_aif1_hw_params(struct snd_pcm_substream *substream,
 			     struct snd_pcm_hw_params *params)
@@ -76,11 +86,13 @@ static int cz_init(struct snd_soc_pcm_runtime *rtd)
 	codec = asoc_rtd_to_codec(rtd, 0)->component;
 	card = rtd->card;
 
-	ret = snd_soc_card_jack_new(card, "Headset Jack",
-				SND_JACK_HEADPHONE | SND_JACK_MICROPHONE |
-				SND_JACK_BTN_0 | SND_JACK_BTN_1 |
-				SND_JACK_BTN_2 | SND_JACK_BTN_3,
-				&cz_jack, NULL, 0);
+	ret = snd_soc_card_jack_new_pins(card, "Headset Jack",
+					 SND_JACK_HEADPHONE | SND_JACK_MICROPHONE |
+					 SND_JACK_BTN_0 | SND_JACK_BTN_1 |
+					 SND_JACK_BTN_2 | SND_JACK_BTN_3,
+					 &cz_jack,
+					 cz_jack_pins,
+					 ARRAY_SIZE(cz_jack_pins));
 	if (ret) {
 		dev_err(card->dev, "HP jack creation failed %d\n", ret);
 		return ret;
@@ -91,7 +103,7 @@ static int cz_init(struct snd_soc_pcm_runtime *rtd)
 	return 0;
 }
 
-static struct snd_soc_ops cz_aif1_ops = {
+static const struct snd_soc_ops cz_aif1_ops = {
 	.hw_params = cz_aif1_hw_params,
 };
 
@@ -111,7 +123,7 @@ static struct snd_soc_dai_link cz_dai_rt5650[] = {
 		.name = "amd-rt5645-play",
 		.stream_name = "RT5645_AIF1",
 		.dai_fmt = SND_SOC_DAIFMT_I2S | SND_SOC_DAIFMT_NB_NF
-				| SND_SOC_DAIFMT_CBM_CFM,
+				| SND_SOC_DAIFMT_CBP_CFP,
 		.init = cz_init,
 		.ops = &cz_aif1_ops,
 		SND_SOC_DAILINK_REG(designware1, codec, platform),
@@ -120,7 +132,7 @@ static struct snd_soc_dai_link cz_dai_rt5650[] = {
 		.name = "amd-rt5645-cap",
 		.stream_name = "RT5645_AIF1",
 		.dai_fmt = SND_SOC_DAIFMT_I2S | SND_SOC_DAIFMT_NB_NF
-				| SND_SOC_DAIFMT_CBM_CFM,
+				| SND_SOC_DAIFMT_CBP_CFP,
 		.ops = &cz_aif1_ops,
 		SND_SOC_DAILINK_REG(designware2, codec, platform),
 	},

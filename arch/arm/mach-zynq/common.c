@@ -77,6 +77,7 @@ static int __init zynq_get_revision(void)
 	}
 
 	zynq_devcfg_base = of_iomap(np, 0);
+	of_node_put(np);
 	if (!zynq_devcfg_base) {
 		pr_err("%s: Unable to map I/O memory\n", __func__);
 		return -1;
@@ -95,7 +96,6 @@ static void __init zynq_init_late(void)
 {
 	zynq_core_pm_init();
 	zynq_pm_late_init();
-	zynq_prefetch_init();
 }
 
 /**
@@ -188,13 +188,8 @@ static const char * const zynq_dt_match[] = {
 
 DT_MACHINE_START(XILINX_EP107, "Xilinx Zynq Platform")
 	/* 64KB way size, 8-way associativity, parity disabled */
-#ifdef CONFIG_XILINX_PREFETCH
-	.l2c_aux_val	= 0x30400000,
-	.l2c_aux_mask	= 0xcfbfffff,
-#else
-	.l2c_aux_val	= 0x00400000,
+	.l2c_aux_val    = 0x00400000,
 	.l2c_aux_mask	= 0xffbfffff,
-#endif
 	.smp		= smp_ops(zynq_smp_ops),
 	.map_io		= zynq_map_io,
 	.init_irq	= zynq_irq_init,

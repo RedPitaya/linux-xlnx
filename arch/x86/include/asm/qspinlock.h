@@ -53,6 +53,7 @@ static inline void queued_spin_lock_slowpath(struct qspinlock *lock, u32 val)
 
 static inline void queued_spin_unlock(struct qspinlock *lock)
 {
+	kcsan_release();
 	pv_queued_spin_unlock(lock);
 }
 
@@ -72,8 +73,6 @@ static inline bool vcpu_is_preempted(long cpu)
  * which removes ordering between native_pv_spin_init() and HV setup.
  */
 DECLARE_STATIC_KEY_TRUE(virt_spin_lock_key);
-
-void native_pv_lock_init(void) __init;
 
 /*
  * Shortcut for the queued_spin_lock_slowpath() function that allows
@@ -102,10 +101,7 @@ static inline bool virt_spin_lock(struct qspinlock *lock)
 
 	return true;
 }
-#else
-static inline void native_pv_lock_init(void)
-{
-}
+
 #endif /* CONFIG_PARAVIRT */
 
 #include <asm-generic/qspinlock.h>

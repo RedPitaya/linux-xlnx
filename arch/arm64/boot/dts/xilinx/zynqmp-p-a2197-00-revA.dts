@@ -4,7 +4,7 @@
  *
  * (C) Copyright 2019, Xilinx, Inc.
  *
- * Michal Simek <michal.simek@xilinx.com>
+ * Michal Simek <michal.simek@amd.com>
  */
 /dts-v1/;
 
@@ -43,43 +43,43 @@
 		reg = <0x0 0x0 0x0 0x80000000>;
 	};
 
-	ref_clk: ref_clk {
+	ref_clk: ref-clk {
 		status = "okay";
 		compatible = "xlnx,fclk";
 		clocks = <&si570_ref_clk>;
 	};
 
-	ddr4_dimm1_si570: ddr4_dimm1_si570 {
+	ddr4_dimm1_si570: ddr4-dimm1-si570 {
 		status = "okay";
 		compatible = "xlnx,fclk";
 		clocks = <&si570_ddr_dimm1>;
 	};
 
-	ddr4_dimm2_si570: ddr4_dimm2_si570 {
+	ddr4_dimm2_si570: ddr4-dimm2-si570 {
 		status = "okay";
 		compatible = "xlnx,fclk";
 		clocks = <&si570_ddr_dimm2>;
 	};
 
-	lpddr4_si570: lpddr4_si570 {
+	lpddr4_si570: lpddr4-si570 {
 		status = "okay";
 		compatible = "xlnx,fclk";
 		clocks = <&si570_lpddr4>;
 	};
 
-	hsdp_si570: hsdp_si570 {
+	hsdp_si570: hsdp-si570 {
 		status = "okay";
 		compatible = "xlnx,fclk";
 		clocks = <&si570_hsdp>;
 	};
 
-	si5332_1: si5332_1 { /* clk0_sgmii - u142 */
+	si5332_1: si5332-1 { /* clk0_sgmii - u142 */
 		compatible = "fixed-clock";
 		#clock-cells = <0>;
 		clock-frequency = <125000000>;
 	};
 
-	si5332_2: si5332_2 { /* clk1_usb - u142 */
+	si5332_2: si5332-2 { /* clk1_usb - u142 */
 		compatible = "fixed-clock";
 		#clock-cells = <0>;
 		clock-frequency = <27000000>;
@@ -90,6 +90,9 @@
 	status = "okay";
 	non-removable;
 	disable-wp;
+	no-sd;
+	no-sdio;
+	cap-mmc-hw-reset;
 	bus-width = <8>;
 	xlnx,mio-bank = <0>;
 };
@@ -121,9 +124,13 @@
 	phy-handle = <&phy0>;
 	phy-mode = "sgmii"; /* DTG generates this properly  1512 */
 	is-internal-pcspma;
-	/* phy-reset-gpios = <&gpio 142 GPIO_ACTIVE_LOW>; */
-	phy0: ethernet-phy@0 {
-		reg = <0>;
+	mdio: mdio {
+		#address-cells = <1>;
+		#size-cells = <0>;
+		/* reset-gpios = <&gpio 142 GPIO_ACTIVE_LOW>; */
+		phy0: ethernet-phy@0 {
+			reg = <0>;
+		};
 	};
 };
 
@@ -164,7 +171,7 @@
 		  "", "", "", "", "", /* 155 - 159 */
 		  "", "", "", "", "", /* 160 - 164 */
 		  "", "", "", "", "", /* 165 - 169 */
-		  "", "", "", ""; /* 170 - 174 */
+		  "", "", "", ""; /* 170 - 173 */
 };
 
 &i2c0 { /* MIO 34-35 - can't stay here */
@@ -182,7 +189,7 @@
 			reg = <0>;
 			/* On connector J98 */
 			reg_vcc_fmc: tps544@7 { /* u80 - FIXME name - don't know what it does */
-				compatible = "ti,tps544b25"; /* Documentation/hwmon/pmbus - wiring is missing */
+				compatible = "ti,tps544b25"; /* Documentation/hwmon/pmbus.rst - wiring is missing */
 				reg = <0x7>;
 				regulator-name = "reg_vcc_fmc";
 				regulator-min-microvolt = <1800000>;
@@ -190,15 +197,15 @@
 				/* enable-gpio = <&gpio0 23 0x4>; optional */
 			};
 			reg_vcc_ram: tps544@8 { /* u83 - FIXME name - don't know what it does */
-				compatible = "ti,tps544b25"; /* Documentation/hwmon/pmbus - wiring is missing */
+				compatible = "ti,tps544b25"; /* Documentation/hwmon/pmbus.rst - wiring is missing */
 				reg = <0x8>;
 			};
 			reg_vcc_pslp: tps544@9 { /* u85 - FIXME name - don't know what it does */
-				compatible = "ti,tps544b25"; /* Documentation/hwmon/pmbus - wiring is missing */
+				compatible = "ti,tps544b25"; /* Documentation/hwmon/pmbus.rst - wiring is missing */
 				reg = <0x9>;
 			};
 			reg_vcc_psfp: tps544@a { /* u86 - FIXME name - don't know what it does */
-				compatible = "ti,tps544b25"; /* Documentation/hwmon/pmbus - wiring is missing */
+				compatible = "ti,tps544b25"; /* Documentation/hwmon/pmbus.rst - wiring is missing */
 				reg = <0xa>;
 			};
 			reg_vccint: tps53681@60 { /* u70 - FIXME name - don't know what it does - also vcc_io_soc */
@@ -239,75 +246,75 @@
 			reg = <2>;
 			/* On connector J104 */
 			reg_vccaus: tps544@d { /* u88 - FIXME name - don't know what it does */
-				compatible = "ti,tps544b25"; /* Documentation/hwmon/pmbus - wiring is missing */
+				compatible = "ti,tps544b25"; /* Documentation/hwmon/pmbus.rst - wiring is missing */
 				reg = <0xd>;
 			};
 			reg_vccaux_fmc: tps544@e { /* u90 - FIXME name - don't know what it does */
-				compatible = "ti,tps544b25"; /* Documentation/hwmon/pmbus - wiring is missing */
+				compatible = "ti,tps544b25"; /* Documentation/hwmon/pmbus.rst - wiring is missing */
 				reg = <0xe>;
 			};
 			reg_vcco_500: tps544@f { /* u93 - FIXME name - don't know what it does */
-				compatible = "ti,tps544b25"; /* Documentation/hwmon/pmbus - wiring is missing */
+				compatible = "ti,tps544b25"; /* Documentation/hwmon/pmbus.rst - wiring is missing */
 				reg = <0xf>;
 			};
 			reg_vcco_501: tps544@10 { /* u95 - FIXME name - don't know what it does */
-				compatible = "ti,tps544b25"; /* Documentation/hwmon/pmbus - wiring is missing */
+				compatible = "ti,tps544b25"; /* Documentation/hwmon/pmbus.rst - wiring is missing */
 				reg = <0x10>;
 			};
 			reg_vcco_502: tps544@11 { /* u97 - FIXME name - don't know what it does */
-				compatible = "ti,tps544b25"; /* Documentation/hwmon/pmbus - wiring is missing */
+				compatible = "ti,tps544b25"; /* Documentation/hwmon/pmbus.rst - wiring is missing */
 				reg = <0x11>;
 			};
 			reg_vcco_503: tps544@12 { /* u99 - FIXME name - don't know what it does */
-				compatible = "ti,tps544b25"; /* Documentation/hwmon/pmbus - wiring is missing */
+				compatible = "ti,tps544b25"; /* Documentation/hwmon/pmbus.rst - wiring is missing */
 				reg = <0x12>;
 			};
 			reg_vcc1v8: tps544@13 { /* u101 - FIXME name - don't know what it does */
-				compatible = "ti,tps544b25"; /* Documentation/hwmon/pmbus - wiring is missing */
+				compatible = "ti,tps544b25"; /* Documentation/hwmon/pmbus.rst - wiring is missing */
 				reg = <0x13>;
 			};
 			reg_vcc3v3: tps544@14 { /* u102 - FIXME name - don't know what it does */
-				compatible = "ti,tps544b25"; /* Documentation/hwmon/pmbus - wiring is missing */
+				compatible = "ti,tps544b25"; /* Documentation/hwmon/pmbus.rst - wiring is missing */
 				reg = <0x14>;
 			};
 			reg_vcc1v2_ddr4: tps544@15 { /* u104 - FIXME name - don't know what it does */
-				compatible = "ti,tps544b25"; /* Documentation/hwmon/pmbus - wiring is missing */
+				compatible = "ti,tps544b25"; /* Documentation/hwmon/pmbus.rst - wiring is missing */
 				reg = <0x15>;
 			};
 			reg_vcc1v1_lp4: tps544@16 { /* u106 - FIXME name - don't know what it does */
-				compatible = "ti,tps544b25"; /* Documentation/hwmon/pmbus - wiring is missing */
+				compatible = "ti,tps544b25"; /* Documentation/hwmon/pmbus.rst - wiring is missing */
 				reg = <0x16>;
 			};
 			reg_vcc1_1V8_lp4: tps544@17 { /* u108 - FIXME name - don't know what it does */
-				compatible = "ti,tps544b25"; /* Documentation/hwmon/pmbus - wiring is missing */
+				compatible = "ti,tps544b25"; /* Documentation/hwmon/pmbus.rst - wiring is missing */
 				reg = <0x17>;
 			};
 			reg_vadj_fmc: tps544@19 { /* u109 - FIXME name - don't know what it does */
-				compatible = "ti,tps544b25"; /* Documentation/hwmon/pmbus - wiring is missing */
+				compatible = "ti,tps544b25"; /* Documentation/hwmon/pmbus.rst - wiring is missing */
 				reg = <0x19>;
 			};
 			reg_mgtyavcc: tps544@1a { /* u111 - FIXME name - don't know what it does */
-				compatible = "ti,tps544b25"; /* Documentation/hwmon/pmbus - wiring is missing */
+				compatible = "ti,tps544b25"; /* Documentation/hwmon/pmbus.rst - wiring is missing */
 				reg = <0x1a>;
 			};
 			reg_mgtyavtt: tps544@1b { /* u114 - FIXME name - don't know what it does */
-				compatible = "ti,tps544b25"; /* Documentation/hwmon/pmbus - wiring is missing */
+				compatible = "ti,tps544b25"; /* Documentation/hwmon/pmbus.rst - wiring is missing */
 				reg = <0x1b>;
 			};
 			reg_mgtyvccaux: tps544@1c { /* u115 - FIXME name - don't know what it does */
-				compatible = "ti,tps544b25"; /* Documentation/hwmon/pmbus - wiring is missing */
+				compatible = "ti,tps544b25"; /* Documentation/hwmon/pmbus.rst - wiring is missing */
 				reg = <0x1c>;
 			};
 			reg_util_1v13: tps544@1d { /* u117 - FIXME name - don't know what it does */
-				compatible = "ti,tps544b25"; /* Documentation/hwmon/pmbus - wiring is missing */
+				compatible = "ti,tps544b25"; /* Documentation/hwmon/pmbus.rst - wiring is missing */
 				reg = <0x1d>;
 			};
 			reg_util_1v8: tps544@1e { /* u118 - FIXME name - don't know what it does */
-				compatible = "ti,tps544b25"; /* Documentation/hwmon/pmbus - wiring is missing */
+				compatible = "ti,tps544b25"; /* Documentation/hwmon/pmbus.rst - wiring is missing */
 				reg = <0x1e>;
 			};
 			reg_util_2v5: tps544@1f { /* u119 - FIXME name - don't know what it does */
-				compatible = "ti,tps544b25"; /* Documentation/hwmon/pmbus - wiring is missing */
+				compatible = "ti,tps544b25"; /* Documentation/hwmon/pmbus.rst - wiring is missing */
 				reg = <0x1f>;
 			};
 		};
@@ -453,25 +460,25 @@
 				#gpio-cells = <2>;
 				gpio-line-names = "sw4_1", "sw4_2", "sw4_3", "sw4_4",
 						  "", "", "", "";
-				gtr_sel0 {
+				gtr-sel0 {
 					gpio-hog;
 					gpios = <0 0>;
 					input; /* FIXME add meaning */
 					line-name = "sw4_1";
 				};
-				gtr_sel1 {
+				gtr-sel1 {
 					gpio-hog;
 					gpios = <1 0>;
 					input; /* FIXME add meaning */
 					line-name = "sw4_2";
 				};
-				gtr_sel2 {
+				gtr-sel2 {
 					gpio-hog;
 					gpios = <2 0>;
 					input; /* FIXME add meaning */
 					line-name = "sw4_3";
 				};
-				gtr_sel3 {
+				gtr-sel3 {
 					gpio-hog;
 					gpios = <3 0>;
 					input; /* FIXME add meaning */
@@ -558,23 +565,13 @@
 			/* u36 0xd8 or 0xde - pcie clk buf - 9ZML1241EKILF PCIe GEN 4 CLOCK BUFFER FIXME - no driver */
 			/* u37 0xd0 DNP - pcie clocking 1 - 9FGV1006BQ505LTGI - PCIe GEN 4 CLOCK GENERATOR FIXME - no linux driver */
 			/* u38 0xca - pcie clocking 2 - 9ZML1241EKILF PCIe GEN 4 CLOCK BUFFER FIXME - no driver */
-			clock_8t49n287: clock-generator@60 { /* u39 8T49N240 - pcie clocking 3 */
-				#clock-cells = <1>; /* author David Cater <david.cater@idt.com>*/
-				compatible = "idt,8t49n240", "idt,8t49n241"; /* FIXME no driver for 240 */
-				reg = <0x60>;
-				/* Documentation/devicetree/bindings/clock/idt,idt8t49n24x.txt */
-				/* FIXME there input via J241 Samtec CLK1 and CLK0 from U38 - selection PIN */
-
-			};
-
+			/* u39 8T49N240 - pcie clocking 3 */
 		};
 	};
 };
 
 &usb0 {
 	status = "okay";
-	xlnx,usb-polarity = <0>;
-	xlnx,usb-reset-mode = <0>;
 	phy-names = "usb3-phy";
 	phys = <&psgtr 1 PHY_TYPE_USB3 0 1>;
 };
@@ -589,8 +586,6 @@
 
 &usb1 {
 	status = "okay";
-	xlnx,usb-polarity = <0>;
-	xlnx,usb-reset-mode = <0>;
 };
 
 &dwc3_1 {

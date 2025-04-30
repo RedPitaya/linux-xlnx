@@ -60,9 +60,6 @@ struct zcrypt_track {
 	int again_counter;		/* retry attempts counter */
 	int last_qid;			/* last qid used */
 	int last_rc;			/* last return code */
-#ifdef CONFIG_ZCRYPT_DEBUG
-	struct ap_fi fi;		/* failure injection cmd */
-#endif
 };
 
 /* defines related to message tracking */
@@ -170,7 +167,7 @@ static inline unsigned long z_copy_from_user(bool userspace,
 {
 	if (likely(userspace))
 		return copy_from_user(to, from, n);
-	memcpy(to, (void __force *) from, n);
+	memcpy(to, (void __force *)from, n);
 	return 0;
 }
 
@@ -181,7 +178,7 @@ static inline unsigned long z_copy_to_user(bool userspace,
 {
 	if (likely(userspace))
 		return copy_to_user(to, from, n);
-	memcpy((void __force *) to, from, n);
+	memcpy((void __force *)to, from, n);
 	return 0;
 }
 

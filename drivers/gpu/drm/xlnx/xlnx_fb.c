@@ -25,8 +25,10 @@
 #include <drm/drm_crtc.h>
 #include <drm/drm_crtc_helper.h>
 #include <drm/drm_fb_helper.h>
-#include <drm/drm_gem_cma_helper.h>
+#include <drm/drm_framebuffer.h>
+#include <drm/drm_gem_dma_helper.h>
 #include <drm/drm_gem_framebuffer_helper.h>
+#include <drm/drm_modeset_helper.h>
 
 #include "xlnx_crtc.h"
 #include "xlnx_drv.h"
@@ -178,7 +180,7 @@ static int xlnx_fbdev_create(struct drm_fb_helper *fb_helper,
 {
 	struct xlnx_fbdev *fbdev = to_fbdev(fb_helper);
 	struct drm_device *drm = fb_helper->dev;
-	struct drm_gem_cma_object *obj;
+	struct drm_gem_dma_object *obj;
 	struct drm_framebuffer *fb;
 	unsigned int bytes_per_pixel;
 	unsigned long offset;
@@ -197,7 +199,7 @@ static int xlnx_fbdev_create(struct drm_fb_helper *fb_helper,
 		      fbdev->align);
 	bytes *= size->surface_height;
 
-	obj = drm_gem_cma_create(drm, bytes);
+	obj = drm_gem_dma_create(drm, bytes);
 	if (IS_ERR(obj))
 		return PTR_ERR(obj);
 
@@ -224,8 +226,7 @@ static int xlnx_fbdev_create(struct drm_fb_helper *fb_helper,
 
 	fb = fbdev->fb;
 	fb_helper->fb = fb;
-	fb_helper->fbdev = fbi;
-	fbi->flags = FBINFO_FLAG_DEFAULT;
+	fb_helper->info = fbi;
 	fbi->fbops = &xlnx_fbdev_ops;
 
 	ret = fb_alloc_cmap(&fbi->cmap, 256, 0);
@@ -240,9 +241,8 @@ static int xlnx_fbdev_create(struct drm_fb_helper *fb_helper,
 	offset = (unsigned long)fbi->var.xoffset * bytes_per_pixel;
 	offset += fbi->var.yoffset * fb->pitches[0];
 
-	drm->mode_config.fb_base = (resource_size_t)obj->paddr;
 	fbi->screen_base = (char __iomem *)(obj->vaddr + offset);
-	fbi->fix.smem_start = (unsigned long)(obj->paddr + offset);
+	fbi->fix.smem_start = (unsigned long)(obj->dma_addr + offset);
 	fbi->screen_size = bytes;
 	fbi->fix.smem_len = bytes;
 
@@ -254,11 +254,11 @@ err_fb_destroy:
 err_framebuffer_release:
 	framebuffer_release(fbi);
 err_drm_gem_cma_free_object:
-	drm_gem_cma_free_object(&obj->base);
+	drm_gem_dma_free(obj);
 	return ret;
 }
 
-static struct drm_fb_helper_funcs xlnx_fb_helper_funcs = {
+static const struct drm_fb_helper_funcs xlnx_fb_helper_funcs = {
 	.fb_probe = xlnx_fbdev_create,
 };
 
@@ -290,7 +290,7 @@ xlnx_fb_init(struct drm_device *drm, int preferred_bpp,
 	fbdev->vres_mult = vres_mult;
 	fbdev->align = align;
 	fb_helper = &fbdev->fb_helper;
-	drm_fb_helper_prepare(drm, fb_helper, &xlnx_fb_helper_funcs);
+	drm_fb_helper_prepare(drm, fb_helper, preferred_bpp, &xlnx_fb_helper_funcs);
 
 	ret = drm_fb_helper_init(drm, fb_helper);
 	if (ret < 0) {
@@ -298,7 +298,7 @@ xlnx_fb_init(struct drm_device *drm, int preferred_bpp,
 		goto err_free;
 	}
 
-	ret = drm_fb_helper_initial_config(fb_helper, preferred_bpp);
+	ret = drm_fb_helper_initial_config(fb_helper);
 	if (ret < 0) {
 		dev_err(drm->dev, "Failed to set initial hw configuration.\n");
 		goto err_drm_fb_helper_fini;
@@ -330,7 +330,7 @@ static void xlnx_fbdev_defio_fini(struct fb_info *fbi)
 }
 
 /**
- * xlnx_fbdev_fini - Free the Xilinx framebuffer
+ * xlnx_fb_fini - Free the Xilinx framebuffer
  * @fb_helper: drm_fb_helper struct
  *
  * This function is based on drm_fbdev_cma_fini().
@@ -339,9 +339,9 @@ void xlnx_fb_fini(struct drm_fb_helper *fb_helper)
 {
 	struct xlnx_fbdev *fbdev = to_fbdev(fb_helper);
 
-	drm_fb_helper_unregister_fbi(&fbdev->fb_helper);
-	if (fbdev->fb_helper.fbdev)
-		xlnx_fbdev_defio_fini(fbdev->fb_helper.fbdev);
+	drm_fb_helper_unregister_info(&fbdev->fb_helper);
+	if (fbdev->fb_helper.info)
+		xlnx_fbdev_defio_fini(fbdev->fb_helper.info);
 
 	if (fbdev->fb_helper.fb)
 		drm_framebuffer_remove(fbdev->fb_helper.fb);

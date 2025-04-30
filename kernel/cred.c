@@ -4,6 +4,9 @@
  * Copyright (C) 2008 Red Hat, Inc. All Rights Reserved.
  * Written by David Howells (dhowells@redhat.com)
  */
+
+#define pr_fmt(fmt) "CRED: " fmt
+
 #include <linux/export.h>
 #include <linux/cred.h>
 #include <linux/slab.h>
@@ -665,26 +668,20 @@ EXPORT_SYMBOL(cred_fscmp);
 
 int set_cred_ucounts(struct cred *new)
 {
-	struct task_struct *task = current;
-	const struct cred *old = task->real_cred;
 	struct ucounts *new_ucounts, *old_ucounts = new->ucounts;
-
-	if (new->user == old->user && new->user_ns == old->user_ns)
-		return 0;
 
 	/*
 	 * This optimization is needed because alloc_ucounts() uses locks
 	 * for table lookups.
 	 */
-	if (old_ucounts && old_ucounts->ns == new->user_ns && uid_eq(old_ucounts->uid, new->euid))
+	if (old_ucounts->ns == new->user_ns && uid_eq(old_ucounts->uid, new->uid))
 		return 0;
 
-	if (!(new_ucounts = alloc_ucounts(new->user_ns, new->euid)))
+	if (!(new_ucounts = alloc_ucounts(new->user_ns, new->uid)))
 		return -EAGAIN;
 
 	new->ucounts = new_ucounts;
-	if (old_ucounts)
-		put_ucounts(old_ucounts);
+	put_ucounts(old_ucounts);
 
 	return 0;
 }
@@ -707,9 +704,9 @@ void __init cred_init(void)
  * override a task's own credentials so that work can be done on behalf of that
  * task that requires a different subjective context.
  *
- * @daemon is used to provide a base for the security record, but can be NULL.
- * If @daemon is supplied, then the security data will be derived from that;
- * otherwise they'll be set to 0 and no groups, full capabilities and no keys.
+ * @daemon is used to provide a base cred, with the security data derived from
+ * that; if this is "&init_task", they'll be set to 0, no groups, full
+ * capabilities, and no keys.
  *
  * The caller may change these controls afterwards if desired.
  *
@@ -720,17 +717,16 @@ struct cred *prepare_kernel_cred(struct task_struct *daemon)
 	const struct cred *old;
 	struct cred *new;
 
+	if (WARN_ON_ONCE(!daemon))
+		return NULL;
+
 	new = kmem_cache_alloc(cred_jar, GFP_KERNEL);
 	if (!new)
 		return NULL;
 
 	kdebug("prepare_kernel_cred() alloc %p", new);
 
-	if (daemon)
-		old = get_task_cred(daemon);
-	else
-		old = get_cred(&init_cred);
-
+	old = get_task_cred(daemon);
 	validate_creds(old);
 
 	*new = *old;
@@ -842,32 +838,32 @@ EXPORT_SYMBOL(creds_are_invalid);
 static void dump_invalid_creds(const struct cred *cred, const char *label,
 			       const struct task_struct *tsk)
 {
-	printk(KERN_ERR "CRED: %s credentials: %p %s%s%s\n",
+	pr_err("%s credentials: %p %s%s%s\n",
 	       label, cred,
 	       cred == &init_cred ? "[init]" : "",
 	       cred == tsk->real_cred ? "[real]" : "",
 	       cred == tsk->cred ? "[eff]" : "");
-	printk(KERN_ERR "CRED: ->magic=%x, put_addr=%p\n",
+	pr_err("->magic=%x, put_addr=%p\n",
 	       cred->magic, cred->put_addr);
-	printk(KERN_ERR "CRED: ->usage=%d, subscr=%d\n",
+	pr_err("->usage=%d, subscr=%d\n",
 	       atomic_read(&cred->usage),
 	       read_cred_subscribers(cred));
-	printk(KERN_ERR "CRED: ->*uid = { %d,%d,%d,%d }\n",
+	pr_err("->*uid = { %d,%d,%d,%d }\n",
 		from_kuid_munged(&init_user_ns, cred->uid),
 		from_kuid_munged(&init_user_ns, cred->euid),
 		from_kuid_munged(&init_user_ns, cred->suid),
 		from_kuid_munged(&init_user_ns, cred->fsuid));
-	printk(KERN_ERR "CRED: ->*gid = { %d,%d,%d,%d }\n",
+	pr_err("->*gid = { %d,%d,%d,%d }\n",
 		from_kgid_munged(&init_user_ns, cred->gid),
 		from_kgid_munged(&init_user_ns, cred->egid),
 		from_kgid_munged(&init_user_ns, cred->sgid),
 		from_kgid_munged(&init_user_ns, cred->fsgid));
 #ifdef CONFIG_SECURITY
-	printk(KERN_ERR "CRED: ->security is %p\n", cred->security);
+	pr_err("->security is %p\n", cred->security);
 	if ((unsigned long) cred->security >= PAGE_SIZE &&
 	    (((unsigned long) cred->security & 0xffffff00) !=
 	     (POISON_FREE << 24 | POISON_FREE << 16 | POISON_FREE << 8)))
-		printk(KERN_ERR "CRED: ->security {%x, %x}\n",
+		pr_err("->security {%x, %x}\n",
 		       ((u32*)cred->security)[0],
 		       ((u32*)cred->security)[1]);
 #endif
@@ -876,10 +872,10 @@ static void dump_invalid_creds(const struct cred *cred, const char *label,
 /*
  * report use of invalid credentials
  */
-void __invalid_creds(const struct cred *cred, const char *file, unsigned line)
+void __noreturn __invalid_creds(const struct cred *cred, const char *file, unsigned line)
 {
-	printk(KERN_ERR "CRED: Invalid credentials\n");
-	printk(KERN_ERR "CRED: At %s:%u\n", file, line);
+	pr_err("Invalid credentials\n");
+	pr_err("At %s:%u\n", file, line);
 	dump_invalid_creds(cred, "Specified", current);
 	BUG();
 }
@@ -905,14 +901,14 @@ void __validate_process_creds(struct task_struct *tsk,
 	return;
 
 invalid_creds:
-	printk(KERN_ERR "CRED: Invalid process credentials\n");
-	printk(KERN_ERR "CRED: At %s:%u\n", file, line);
+	pr_err("Invalid process credentials\n");
+	pr_err("At %s:%u\n", file, line);
 
 	dump_invalid_creds(tsk->real_cred, "Real", tsk);
 	if (tsk->cred != tsk->real_cred)
 		dump_invalid_creds(tsk->cred, "Effective", tsk);
 	else
-		printk(KERN_ERR "CRED: Effective creds == Real creds\n");
+		pr_err("Effective creds == Real creds\n");
 	BUG();
 }
 EXPORT_SYMBOL(__validate_process_creds);

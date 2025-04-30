@@ -6,9 +6,6 @@
 #ifndef _UAPI_AI_ENGINE_H_
 #define _UAPI_AI_ENGINE_H_
 
-#ifndef __KERNEL__
-#include <stdlib.h>
-#endif
 
 #include <linux/ioctl.h>
 #include <linux/types.h>
@@ -17,6 +14,10 @@ enum aie_reg_op {
 	AIE_REG_WRITE,
 	AIE_REG_BLOCKWRITE,
 	AIE_REG_BLOCKSET,
+	AIE_REG_MASKWRITE,
+	AIE_REG_MASKPOLL,
+	AIE_CONFIG_SHIMDMA_BD,
+	AIE_CONFIG_SHIMDMA_DMABUF_BD,
 };
 
 /**
@@ -156,8 +157,8 @@ struct aie_range {
  */
 struct aie_mem {
 	struct aie_range range;
-	size_t offset;
-	size_t size;
+	__kernel_size_t offset;
+	__kernel_size_t size;
 	int fd;
 };
 
@@ -219,8 +220,8 @@ struct aie_partition_query {
 
 #define AIE_PART_ID_START_COL_SHIFT	0U
 #define AIE_PART_ID_NUM_COLS_SHIFT	8U
-#define AIE_PART_ID_START_COL_MASK	GENMASK(7, 0)
-#define AIE_PART_ID_NUM_COLS_MASK	GENMASK(15, 8)
+#define AIE_PART_ID_START_COL_MASK	(0xFFU << AIE_PART_ID_START_COL_SHIFT)
+#define AIE_PART_ID_NUM_COLS_MASK	(0xFFU << AIE_PART_ID_NUM_COLS_SHIFT)
 
 #define aie_part_id_get_val(part_id, F) \
 	(((part_id) & AIE_PART_ID_##F ##_MASK) >> AIE_PART_ID_##F ##_SHIFT)
@@ -246,6 +247,28 @@ struct aie_partition_req {
 	__u64 meta_data;
 	__u32 flag;
 };
+
+/**
+ * struct aie_partition_init_args - AIE partition initialization arguments
+ * @locs: Allocated array of tile locations that will be used
+ * @num_tiles: Number of tiles to use
+ * @init_opts: Partition initialization options
+ */
+struct aie_partition_init_args {
+	struct aie_location *locs;
+	__u32 num_tiles;
+	__u32 init_opts;
+};
+
+/*
+ * AI engine partition initialize options
+ */
+#define AIE_PART_INIT_OPT_COLUMN_RST		(1U << 0)
+#define AIE_PART_INIT_OPT_SHIM_RST		(1U << 1)
+#define AIE_PART_INIT_OPT_BLOCK_NOCAXIMMERR	(1U << 2)
+#define AIE_PART_INIT_OPT_ISOLATE		(1U << 3)
+#define AIE_PART_INIT_OPT_ZEROIZEMEM		(1U << 4)
+#define AIE_PART_INIT_OPT_DEFAULT		0xFU
 
 /**
  * struct aie_dma_bd_args - AIE DMA buffer descriptor information
@@ -284,6 +307,43 @@ struct aie_dmabuf_bd_args {
 struct aie_tiles_array {
 	struct aie_location *locs;
 	__u32 num_tiles;
+};
+
+/**
+ * struct aie_column_args - AIE columns args
+ * @start_col : start column
+ * @num_cols : number of columns in aie
+ * @enable : enable/disable the columns
+ */
+struct aie_column_args {
+	__u32 start_col;
+	__u32 num_cols;
+	__u8 enable;
+};
+
+/**
+ * struct aie_part_fd - AIE partition fd
+ * @args: aie column args
+ * @partition_id: It is used to identify the
+ *		  AI engine partition in the system
+ * @uid: It is uid of aie partition
+ * @fd: It is file descriptor of AI engine partition
+ */
+struct aie_part_fd {
+	struct aie_column_args args;
+	__u32 partition_id;
+	__u32 uid;
+	int fd;
+};
+
+/**
+ * struct aie_part_fd_list - AIE partition fd list
+ * @list: aie parititon list
+ * @num_entries: num of entries in the list
+ */
+struct aie_part_fd_list {
+	struct aie_part_fd *list;
+	int num_entries;
 };
 
 /**
@@ -393,8 +453,60 @@ struct aie_rsc_user_stat_array {
 					      struct aie_partition_query)
 #define AIE_REQUEST_PART_IOCTL		_IOR(AIE_IOCTL_BASE, 0x2, \
 					     struct aie_partition_req)
+#define AIE_GET_PARTITION_FD_LIST_IOCTL	_IOWR(AIE_IOCTL_BASE, 0x3, \
+					     struct aie_part_fd_list)
 
 /* AI engine partition IOCTL operations */
+/**
+ * DOC: AIE_PARTITION_INIT_IOCTL - initializes AI engine partition
+ *
+ * This ioctl is used initialize a partition. Options parameter can
+ * be passed for initialization options. This operation does the
+ * following steps to initialize AI engine partition:
+ * 1. Clock gate all columns
+ * 2. Enable column reset
+ * 3. Ungate all columns
+ * 4. Disable column reset
+ * 5. Reset shim tiles
+ * 6. Setup AXI MM not to return errors for AXI decode or slave
+ *    errors, raise events instead.
+ * 7. Setup partition isolation
+ * 8. Zeroize memory
+ */
+#define AIE_PARTITION_INIT_IOCTL	_IOW(AIE_IOCTL_BASE, 0x3, \
+					     struct aie_partition_init_args)
+
+/**
+ * DOC: AIE_PARTITION_TEAR_IOCTL - teardown AI engine partition
+ *
+ * This ioctl is used teardown a partition. This operation does the
+ * following steps to teardown AI engine partition:
+ * 1. Clock gate all columns
+ * 2. Enable column reset
+ * 3. Ungate all columns
+ * 4. Disable column reset
+ * 5. Reset shim tiles
+ * 6. Zeroize memory
+ * 7. Clock gate all columns
+ */
+#define AIE_PARTITION_TEAR_IOCTL	_IO(AIE_IOCTL_BASE, 0x4)
+
+/**
+ * DOC: AIE_PARTITION_CLR_CONTEXT_IOCTL - clear context of AI engine partition
+ *
+ * This ioctl is used to clear context of a partition.  This operation does the
+ * following steps to clear context of AI engine partition:
+ * - Gate all columns
+ * - Reset AI engine partition columns
+ * - Ungate all columns
+ * - Reset shim tiles
+ * - Setup axi mm to raise events
+ * - Setup partition isolation
+ * - Zeroize data memory
+ * - Setup L2 intrupt
+ */
+#define AIE_PARTITION_CLR_CONTEXT_IOCTL _IO(AIE_IOCTL_BASE, 0x5)
+
 #define AIE_REG_IOCTL			_IOWR(AIE_IOCTL_BASE, 0x8, \
 					      struct aie_reg_args)
 /**
@@ -569,5 +681,51 @@ struct aie_rsc_user_stat_array {
  */
 #define AIE_RSC_GET_STAT_IOCTL		_IOW(AIE_IOCTL_BASE, 0x1a, \
 					struct aie_rsc_user_stat_array)
+
+/**
+ * DOC: AIE_SET_COLUMN_CLOCK_IOCTL - enable/disable the column clock
+ *
+ * This ioctl is used to enable and disable the column clock.
+ * User passes an aie_tile_array, If enable is set, It will request the
+ * AI engine partition, the kernel driver will scan the partition to track
+ * which tiles are enabled or not. After that, if user want to request for
+ * more tiles, it will use this ioctl to request more tiles.
+ * If enable is set to zero, It will release the AI engine titles
+ * If the aie_tiles_array is empty, it means it will request/release for all
+ * tiles in the partition.
+ */
+#define AIE_SET_COLUMN_CLOCK_IOCTL	_IOW(AIE_IOCTL_BASE, 0x1b, \
+					struct aie_tiles_array)
+
+/**
+ * DOC: AIE_DMA_MEM_ALLOCATE_IOCTL - allocates the DMA memory
+ *
+ * This ioctl is used to allocate physically contiguous memory for DMA
+ * transactions and export it as a dma-buf which is passed to the userspace as
+ * a file descriptor. The file descriptor is memory mapped into the process's
+ * address space.
+ */
+#define AIE_DMA_MEM_ALLOCATE_IOCTL	_IOW(AIE_IOCTL_BASE, 0x1c, \
+					     __kernel_size_t)
+
+/**
+ * DOC: AIE_DMA_MEM_FREE_IOCTL - de-allocates the DMA memory
+ *
+ * This ioctl is used to de-allocate physically contiguous memory for DMA
+ * transactions and unexport it as a dma-buf which is passed to the userspace as
+ * a file descriptor.
+ */
+#define AIE_DMA_MEM_FREE_IOCTL          _IOW(AIE_IOCTL_BASE, 0x1d, int)
+
+/**
+ * DOC: AIE_UPDATE_SHIMDMA_DMABUF_BD_ADDR_IOCTL - updates the SHIM DMA address
+ *						  in the BD registers.
+ *
+ * This ioctl is used to update the SHIM DMA address. The
+ * aie_dmabuf_bd_args contains the dmabuf fd and the offset. The buffer
+ * descriptor only contains the offset to be updated.
+ */
+#define AIE_UPDATE_SHIMDMA_DMABUF_BD_ADDR_IOCTL	_IOW(AIE_IOCTL_BASE, 0x1e, \
+						struct aie_dmabuf_bd_args)
 
 #endif

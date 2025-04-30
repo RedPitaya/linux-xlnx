@@ -63,17 +63,24 @@
 #define AIE_SHIMPL_BISR_CACHE_CTRL_REGOFF	0x00036000U
 #define AIE_SHIMPL_L1INTR_MASK_A_REGOFF		0x00035000U
 #define AIE_SHIMPL_L1INTR_BLOCK_NORTH_B_REGOFF	0x00035050U
+#define AIE_SHIMPL_TILECTRL_REGOFF		0x00036030U
 #define AIE_SHIMPL_CLKCNTR_REGOFF		0x00036040U
 #define AIE_SHIMPL_COLRESET_REGOFF		0x00036048U
 #define AIE_SHIMPL_RESET_REGOFF			0x0003604cU
 #define AIE_SHIMPL_GROUP_ERROR_REGOFF		0x0003450cU
+#define AIE_TILE_MEM_DMA_BD0_ADDR_A		0x0001D000U
+#define AIE_TILE_CORE_TILECTRL_REGOFF		0x00036030U
 #define AIE_TILE_CORE_CLKCNTR_REGOFF		0x00036040U
 #define AIE_TILE_CORE_GROUP_ERROR_REGOFF	0x00034510U
 #define AIE_TILE_MEM_GROUP_ERROR_REGOFF		0x00014514U
 #define AIE_TILE_CORE_R0_REGOFF			0x00030000U
+#define AIE_TILE_CORE_MC1_REGOFF		0x00030470U
+#define AIE_TILE_CORE_S0_REGOFF			0x00030480U
+#define AIE_TILE_CORE_S7_REGOFF			0x000304F0U
+#define AIE_TILE_CORE_LS_REGOFF			0x00030500U
 #define AIE_TILE_CORE_LC_REGOFF			0x00030520U
 #define AIE_TILE_CORE_VRL0_REGOFF		0x00030530U
-#define AIE_TILE_CORE_AMH3_PART3_REGOFF		0x000307a0U
+#define AIE_TILE_CORE_AMH3_PART3_REGOFF		0x000307A0U
 
 /*
  * Register masks
@@ -134,6 +141,12 @@ static const struct aie_tile_regs aie_kernel_regs[] = {
 	 .soff = AIE_SHIMPL_RESET_REGOFF,
 	 .eoff = AIE_SHIMPL_RESET_REGOFF,
 	},
+	/* SHIM tile control */
+	{.attribute = (AIE_TILE_TYPE_MASK_SHIMPL | AIE_TILE_TYPE_MASK_SHIMNOC) <<
+		      AIE_REGS_ATTR_TILE_TYPE_SHIFT,
+	 .soff = AIE_SHIMPL_TILECTRL_REGOFF,
+	 .eoff = AIE_SHIMPL_TILECTRL_REGOFF,
+	},
 	/* SHIM clock control */
 	{.attribute = (AIE_TILE_TYPE_MASK_SHIMPL | AIE_TILE_TYPE_MASK_SHIMNOC) <<
 		      AIE_REGS_ATTR_TILE_TYPE_SHIFT,
@@ -152,6 +165,11 @@ static const struct aie_tile_regs aie_kernel_regs[] = {
 	 .soff = AIE_SHIMPL_GROUP_ERROR_REGOFF,
 	 .eoff = AIE_SHIMPL_GROUP_ERROR_REGOFF,
 	},
+	/* Core tile control */
+	{.attribute = AIE_TILE_TYPE_MASK_TILE << AIE_REGS_ATTR_TILE_TYPE_SHIFT,
+	 .soff = AIE_TILE_CORE_TILECTRL_REGOFF,
+	 .eoff = AIE_TILE_CORE_TILECTRL_REGOFF,
+	},
 	/* Tile clock control */
 	{.attribute = AIE_TILE_TYPE_MASK_TILE << AIE_REGS_ATTR_TILE_TYPE_SHIFT,
 	 .soff = AIE_TILE_CORE_CLKCNTR_REGOFF,
@@ -169,24 +187,37 @@ static const struct aie_tile_regs aie_kernel_regs[] = {
 	},
 };
 
-static const struct aie_tile_regs aie_core_32bit_regs = {
-	.attribute = AIE_TILE_TYPE_TILE << AIE_REGS_ATTR_TILE_TYPE_SHIFT,
-	.soff = AIE_TILE_CORE_R0_REGOFF,
-	.eoff = AIE_TILE_CORE_LC_REGOFF,
-};
-
-static const struct aie_tile_regs aie_core_128bit_regs = {
-	.attribute = AIE_TILE_TYPE_TILE << AIE_REGS_ATTR_TILE_TYPE_SHIFT,
-	.soff = AIE_TILE_CORE_VRL0_REGOFF,
-	.eoff = AIE_TILE_CORE_AMH3_PART3_REGOFF,
-};
-
-static const struct aie_core_regs_attr aie_core_regs[] = {
-	{.core_regs = &aie_core_32bit_regs,
-	 .width = 1,
+static const struct aie_tile_regs aie_core_regs_clr[] = {
+	{.soff = AIE_TILE_CORE_R0_REGOFF,
+	 .eoff = AIE_TILE_CORE_MC1_REGOFF,
+	 .width = 4,	/* 32 bits */
+	 .step = 16,	/* 0x10 */
+	 .attribute = AIE_TILE_TYPE_TILE << AIE_REGS_ATTR_TILE_TYPE_SHIFT,
 	},
-	{.core_regs = &aie_core_128bit_regs,
-	 .width = 4,
+	{.soff = AIE_TILE_CORE_S0_REGOFF,
+	 .eoff = AIE_TILE_CORE_S7_REGOFF,
+	 .width = 1,	/* 8 bits */
+	 .step = 16,	/* 0x10 */
+	 .attribute = AIE_TILE_TYPE_TILE << AIE_REGS_ATTR_TILE_TYPE_SHIFT,
+	},
+	{.soff = AIE_TILE_CORE_LS_REGOFF,
+	 .eoff = AIE_TILE_CORE_LS_REGOFF,
+	 .width = 4,	/* 32 bits */
+	 .step = 4,
+	 .attribute = AIE_TILE_TYPE_TILE << AIE_REGS_ATTR_TILE_TYPE_SHIFT,
+	},
+	{.soff = AIE_TILE_CORE_LC_REGOFF,
+	 .eoff = AIE_TILE_CORE_LC_REGOFF,
+	 .width = 4,	/* 32 bits */
+	 .step = 4,
+	 .attribute = AIE_TILE_TYPE_TILE << AIE_REGS_ATTR_TILE_TYPE_SHIFT,
+	},
+
+	{.soff = AIE_TILE_CORE_VRL0_REGOFF,
+	 .eoff = AIE_TILE_CORE_AMH3_PART3_REGOFF,
+	 .width = 16,	/* 128 bits */
+	 .step = 16,	/* 0x10 */
+	 .attribute = AIE_TILE_TYPE_TILE << AIE_REGS_ATTR_TILE_TYPE_SHIFT,
 	},
 };
 
@@ -198,6 +229,280 @@ static const struct aie_single_reg_field aie_col_rst = {
 static const struct aie_single_reg_field aie_col_clkbuf = {
 	.mask = AIE_SHIMPL_CLKCNTR_COLBUF_MASK,
 	.regoff = AIE_SHIMPL_CLKCNTR_REGOFF,
+};
+
+static const struct aie_bd_attr aie_tilebd = {
+	.valid_bd = {
+		.mask = BIT(31),
+		.regoff = 0x18U,
+	},
+	.next_bd = {
+		.mask = GENMASK(16, 13),
+		.regoff = 0x18U,
+	},
+	.use_next = {
+		.mask = BIT(17),
+		.regoff = 0x18U,
+	},
+	.addr = {
+		.addr = {
+			.mask = GENMASK(12, 0),
+			.regoff = 0x0U,
+		},
+		.length = {
+			.mask = GENMASK(12, 0),
+			.regoff = 0x18U,
+		},
+	},
+	.addr_2 = {
+		.addr = {
+			.mask = GENMASK(12, 0),
+			.regoff = 0x4U,
+		},
+		.length = {
+			.mask = GENMASK(12, 0),
+			.regoff = 0x18U,
+		},
+	},
+	.lock = {
+		.lock_acq_id = {
+			.mask = GENMASK(25, 22),
+			.regoff = 0x0U,
+		},
+		.lock_acq_val = {
+			.mask = BIT(17),
+			.regoff = 0x0U,
+		},
+		.lock_acq_en = {
+			.mask = BIT(18),
+			.regoff = 0x0U,
+		},
+		.lock_acq_val_en = {
+			.mask = BIT(16),
+			.regoff = 0x0U,
+		},
+		.lock_rel_id = {
+			.mask = GENMASK(25, 22),
+			.regoff = 0x0U,
+		},
+		.lock_rel_val = {
+			.mask = BIT(20),
+			.regoff = 0x0U,
+		},
+		.lock_rel_en = {
+			.mask = BIT(21),
+			.regoff = 0x0U,
+		},
+		.lock_rel_val_en = {
+			.mask = BIT(19),
+			.regoff = 0x0U,
+		},
+	},
+	.lock_2 = {
+		.lock_acq_id = {
+			.mask = GENMASK(25, 22),
+			.regoff = 0x4U,
+		},
+		.lock_acq_val = {
+			.mask = BIT(17),
+			.regoff = 0x4U,
+		},
+		.lock_acq_en = {
+			.mask = BIT(18),
+			.regoff = 0x4U,
+		},
+		.lock_acq_val_en = {
+			.mask = BIT(16),
+			.regoff = 0x4U,
+		},
+		.lock_rel_id = {
+			.mask = GENMASK(25, 22),
+			.regoff = 0x4U,
+		},
+		.lock_rel_val = {
+			.mask = BIT(20),
+			.regoff = 0x4U,
+		},
+		.lock_rel_en = {
+			.mask = BIT(21),
+			.regoff = 0x4U,
+		},
+		.lock_rel_val_en = {
+			.mask = BIT(19),
+			.regoff = 0x4U,
+		},
+	},
+	.packet = {
+		.pkt_en = {
+			.mask = BIT(27),
+			.regoff = 0x18U,
+		},
+		.pkt_type = {
+			.mask = GENMASK(14, 12),
+			.regoff = 0x10U,
+		},
+		.pkt_id = {
+			.mask = GENMASK(4, 0),
+			.regoff = 0x10U,
+		},
+	},
+	.aie_dim = {
+		.x_incr = {
+			.mask = GENMASK(31, 24),
+			.regoff = 0x8U,
+		},
+		.x_wrap = {
+			.mask = GENMASK(23, 16),
+			.regoff = 0x8U,
+		},
+		.x_off = {
+			.mask = GENMASK(12, 0),
+			.regoff = 0x8U,
+		},
+		.y_incr = {
+			.mask = GENMASK(31, 24),
+			.regoff = 0xCU,
+		},
+		.y_wrap = {
+			.mask = GENMASK(23, 16),
+			.regoff = 0xCU,
+		},
+		.y_off = {
+			.mask = GENMASK(12, 0),
+			.regoff = 0xCU,
+		},
+	},
+	.buf_sel = {
+		.mask = BIT(16),
+		.regoff = 0x14U,
+	},
+	.curr_ptr = {
+		.mask = GENMASK(12, 0),
+		.regoff = 0x14U,
+	},
+	.interleave_en = {
+		.mask = BIT(26),
+		.regoff = 0x18U,
+	},
+	.interleave_cnt = {
+		.mask = GENMASK(25, 18),
+		.regoff = 0x18U,
+	},
+	.double_buff_en = {
+		.mask = BIT(30),
+		.regoff = 0x18U,
+	},
+	.fifo_mode = {
+		.mask = GENMASK(29, 28),
+		.regoff = 0x18U,
+	},
+	.bd_idx_off = 0x20U,
+};
+
+static const struct aie_bd_attr aie_shimbd = {
+	.valid_bd = {
+		.mask = BIT(0),
+		.regoff = 0x8U,
+	},
+	.next_bd = {
+		.mask = GENMASK(14, 11),
+		.regoff = 0x8U,
+	},
+	.use_next = {
+		.mask = BIT(15),
+		.regoff = 0x8U,
+	},
+	.addr = {
+		.addr = {
+			.mask = GENMASK(31, 0),
+			.regoff = 0x0U,
+		},
+		.length = {
+			.mask = GENMASK(31, 0),
+			.regoff = 0x4U,
+		},
+	},
+	.addr_2 = {
+		.addr = {
+			.mask = GENMASK(31, 16),
+			.regoff = 0x8U,
+		},
+		.length = {
+			.mask = GENMASK(31, 0),
+			.regoff = 0x4U,
+		},
+	},
+	.lock = {
+		.lock_acq_id = {
+			.mask = GENMASK(10, 7),
+			.regoff = 0x8U,
+		},
+		.lock_acq_val = {
+			.mask = BIT(2),
+			.regoff = 0x8U,
+		},
+		.lock_acq_en = {
+			.mask = BIT(3),
+			.regoff = 0x8U,
+		},
+		.lock_acq_val_en = {
+			.mask = BIT(1),
+			.regoff = 0x8U,
+		},
+		.lock_rel_id = {
+			.mask = GENMASK(10, 7),
+			.regoff = 0x8U,
+		},
+		.lock_rel_val = {
+			.mask = BIT(5),
+			.regoff = 0x8U,
+		},
+		.lock_rel_en = {
+			.mask = BIT(6),
+			.regoff = 0x8U,
+		},
+		.lock_rel_val_en = {
+			.mask = BIT(4),
+			.regoff = 0x8U,
+		},
+	},
+	.packet = {
+		.pkt_en = {
+			.mask = BIT(31),
+			.regoff = 0x10U,
+		},
+		.pkt_type = {
+			.mask = GENMASK(14, 12),
+			.regoff = 0x10U,
+		},
+		.pkt_id = {
+			.mask = GENMASK(4, 0),
+			.regoff = 0x10U,
+		},
+	},
+	.axi = {
+		.smid = {
+			.mask = GENMASK(31, 28),
+			.regoff = 0xCU,
+		},
+		.cache = {
+			.mask = GENMASK(3, 0),
+			.regoff = 0xCU,
+		},
+		.qos = {
+			.mask = GENMASK(8, 5),
+			.regoff = 0xCU,
+		},
+		.secure_en = {
+			.mask = BIT(4),
+			.regoff = 0xCU,
+		},
+		.burst_len = {
+			.mask = GENMASK(10, 9),
+			.regoff = 0xCU,
+		},
+	},
+	.bd_idx_off = 0x14U,
 };
 
 static const struct aie_dma_attr aie_shimdma = {
@@ -268,11 +573,13 @@ static const struct aie_dma_attr aie_tiledma = {
 		.mask = BIT(28),
 		.regoff = 1U,
 	},
+	.bd_regoff = AIE_TILE_MEM_DMA_BD0_ADDR_A,
 	.mm2s_sts_regoff = 0x1df10U,
 	.s2mm_sts_regoff = 0x1df00U,
 	.num_bds = 16,
 	.num_mm2s_chan = 2U,
 	.num_s2mm_chan = 2U,
+	.bd_len = 0x1CU,
 };
 
 static char *aie_dma_status_str[] = {
@@ -280,6 +587,7 @@ static char *aie_dma_status_str[] = {
 	"starting",
 	"running",
 	"stalled_on_requesting_lock",
+	"invalid_status",
 };
 
 static char *aie_queue_status_str[] = {
@@ -863,6 +1171,8 @@ static char *aie_lock_status_str[] = {
 };
 
 static const struct aie_dev_attr aie_tile_dev_attr[] = {
+	AIE_TILE_DEV_ATTR_RO(bd, AIE_TILE_TYPE_MASK_TILE |
+			     AIE_TILE_TYPE_MASK_SHIMNOC),
 	AIE_TILE_DEV_ATTR_RO(core, AIE_TILE_TYPE_MASK_TILE),
 	AIE_TILE_DEV_ATTR_RO(dma, AIE_TILE_TYPE_MASK_TILE |
 			     AIE_TILE_TYPE_MASK_SHIMNOC),
@@ -876,6 +1186,10 @@ static const struct aie_dev_attr aie_tile_dev_attr[] = {
 			     AIE_TILE_TYPE_MASK_SHIMNOC),
 };
 
+static const struct aie_dev_attr aie_aperture_dev_attr[] = {
+	AIE_APERTURE_ATTR_RO(hardware_info),
+};
+
 static const struct aie_dev_attr aie_part_dev_attr[] = {
 	AIE_PART_DEV_ATTR_RO(error_stat),
 	AIE_PART_DEV_ATTR_RO(current_freq),
@@ -887,6 +1201,13 @@ static const struct aie_bin_attr aie_part_bin_attr[] = {
 	AIE_PART_BIN_ATTR_RO(error, AIE_PART_SYSFS_ERROR_BINA_SIZE),
 	AIE_PART_BIN_ATTR_RO(lock, AIE_PART_SYSFS_LOCK_BINA_SIZE),
 	AIE_PART_BIN_ATTR_RO(status, AIE_PART_SYSFS_STATUS_BINA_SIZE),
+};
+
+static const struct aie_sysfs_attr aie_aperture_sysfs_attr = {
+	.dev_attr = aie_aperture_dev_attr,
+	.bin_attr = NULL,
+	.num_dev_attrs = ARRAY_SIZE(aie_aperture_dev_attr),
+	.num_bin_attrs = 0U,
 };
 
 static const struct aie_sysfs_attr aie_part_sysfs_attr = {
@@ -910,6 +1231,12 @@ static u32 aie_get_tile_type(struct aie_device *adev, struct aie_location *loc)
 	/* SHIM row */
 	if ((loc->col % 4) < 2)
 		return AIE_TILE_TYPE_SHIMPL;
+
+	if (adev->device_name == AIE_DEV_GEN_S100 ||
+	    adev->device_name == AIE_DEV_GEN_S200) {
+		if (loc->col == 58)
+			return AIE_TILE_TYPE_SHIMPL;
+	}
 
 	return AIE_TILE_TYPE_SHIMNOC;
 }
@@ -948,62 +1275,6 @@ static unsigned int aie_get_mem_info(struct aie_device *adev,
 	pmem[1].mem.range.size.row = num_rows;
 
 	return NUM_MEMS_PER_TILE;
-}
-
-/**
- * aie_set_shim_reset() - Set AI engine SHIM reset
- * @aperture: AI engine aperture
- * @range: range of AI engine tiles
- * @assert: true to set reset, false to unset reset
- */
-static void aie_set_shim_reset(struct aie_aperture *aperture,
-			       struct aie_range *range, bool assert)
-{
-	u32 c;
-	u32 val;
-	struct aie_location loc;
-
-	val = FIELD_PREP(AIE_SHIMPL_SHIMRST_MASK, (assert ? 1 : 0));
-	loc.row = 0;
-	for (c = range->start.col; c < range->start.col + range->size.col;
-	     c++) {
-		u32 regoff;
-
-		loc.col = c;
-		regoff = aie_cal_regoff(aperture->adev, loc,
-					AIE_SHIMPL_RESET_REGOFF);
-		iowrite32(val, aperture->base + regoff);
-	}
-}
-
-static int aie_reset_shim(struct aie_aperture *aperture,
-			  struct aie_range *range)
-{
-	int ret;
-
-	/* Enable shim reset of each column */
-	aie_set_shim_reset(aperture, range, true);
-
-	/* Assert shim reset of AI engine array */
-	ret = zynqmp_pm_reset_assert(VERSAL_PM_RST_AIE_SHIM_ID,
-				     PM_RESET_ACTION_ASSERT);
-	if (ret < 0) {
-		dev_err(&aperture->dev, "failed to assert SHIM reset.\n");
-		return ret;
-	}
-
-	/* Release shim reset of AI engine array */
-	ret = zynqmp_pm_reset_assert(VERSAL_PM_RST_AIE_SHIM_ID,
-				     PM_RESET_ACTION_RELEASE);
-	if (ret < 0) {
-		dev_err(&aperture->dev, "failed to release SHIM reset.\n");
-		return ret;
-	}
-
-	/* Disable shim reset of each column */
-	aie_set_shim_reset(aperture, range, false);
-
-	return 0;
 }
 
 static int aie_init_part_clk_state(struct aie_partition *apart)
@@ -1053,7 +1324,7 @@ static int aie_scan_part_clocks(struct aie_partition *apart)
 			 * Reading registers of the current tile to see the next
 			 * tile is clock gated.
 			 */
-			nbitpos = loc.col * (range->size.row - 1) + loc.row;
+			nbitpos = (loc.col - range->start.col) * (range->size.row - 1) + loc.row;
 
 			if (aie_get_tile_type(adev, &loc) !=
 					AIE_TILE_TYPE_TILE) {
@@ -1259,48 +1530,933 @@ static u32 aie_get_core_status(struct aie_partition *apart,
  */
 static int aie_part_clear_mems(struct aie_partition *apart)
 {
+	struct aie_range *range = &apart->range;
+	u32 node_id = apart->adev->pm_node_id;
+	int ret;
+
+	ret = zynqmp_pm_aie_operation(node_id, range->start.col,
+				      range->size.col,
+				      XILINX_AIE_OPS_ZEROISATION);
+	if (ret < 0)
+		dev_err(&apart->dev, "failed to clear memory for partition\n");
+
+	return ret;
+}
+
+/**
+ * aie_set_tile_isolation() - Set isolation boundary of AI engine tile
+ * @apart: AI engine partition
+ * @loc: Location of tile
+ * @dir: Direction to block
+ * @return: return 0 if success negative value for failure.
+ *
+ * Possible direction values are:
+ *	- AIE_ISOLATE_EAST_MASK
+ *	- AIE_ISOLATE_NORTH_MASK
+ *	- AIE_ISOLATE_WEST_MASK
+ *	- AIE_ISOLATE_SOUTH_MASK
+ *	- AIE_ISOLATE_ALL_MASK
+ *	- or "OR" of multiple values
+ */
+static int aie_set_tile_isolation(struct aie_partition *apart,
+				  struct aie_location *loc, u8 dir)
+{
 	struct aie_device *adev = apart->adev;
-	struct aie_part_mem *pmems = apart->pmems;
-	u32 i, num_mems;
+	struct aie_aperture *aperture = apart->aperture;
+	void __iomem *va;
+	u32 ttype, val;
 
-	/* Get the number of different types of memories */
-	num_mems = adev->ops->get_mem_info(adev, &apart->range, NULL);
-	if (!num_mems)
-		return 0;
-
-	/* Clear each type of memories in the partition */
-	for (i = 0; i < num_mems; i++) {
-		struct aie_mem *mem = &pmems[i].mem;
-		struct aie_range *range = &mem->range;
-		u32 c, r;
-
-		for (c = range->start.col;
-		     c < range->start.col + range->size.col; c++) {
-			for (r = range->start.row;
-			     r < range->start.row + range->size.row; r++) {
-				struct aie_location loc;
-				u32 memoff;
-
-				loc.col = c;
-				loc.row = r;
-				memoff = aie_cal_regoff(adev, loc, mem->offset);
-				memset_io(apart->aperture->base + memoff, 0,
-					  mem->size);
-			}
-		}
+	/* For AIE device, dir input will match register masks */
+	val = (u32)dir;
+	ttype = aie_get_tile_type(adev, loc);
+	if (ttype == AIE_TILE_TYPE_TILE) {
+		va = aperture->base +
+		     aie_cal_regoff(adev, *loc, AIE_TILE_CORE_TILECTRL_REGOFF);
+	} else {
+		va = aperture->base +
+		     aie_cal_regoff(adev, *loc, AIE_SHIMPL_TILECTRL_REGOFF);
 	}
+	iowrite32(val, va);
 
 	return 0;
+}
+
+/**
+ * aie_get_lock_status() - reads the lock status.
+ * @apart: AI engine partition.
+ * @loc: location of AI engine DMA.
+ * @return: 32-bit register value.
+ */
+static u32 aie_get_lock_status(struct aie_partition *apart,
+			       struct aie_location *loc)
+{
+	u32 ttype, stsoff, regoff;
+
+	ttype = aie_get_tile_type(apart->adev, loc);
+	if (ttype != AIE_TILE_TYPE_TILE)
+		stsoff = aie_pl_lock.sts_regoff;
+	else
+		stsoff = aie_mem_lock.sts_regoff;
+
+	regoff = aie_cal_regoff(apart->adev, *loc, stsoff);
+
+	return ioread32(apart->aperture->base + regoff);
+}
+
+/**
+ * aie_get_lock_status_str() - returns the string value corresponding to
+ *			       lock status value.
+ * @apart: AI engine partition.
+ * @loc: location of AI engine lock.
+ * @status: status value of lock.
+ * @lock: lock ID.
+ * @buffer: location to return lock status string.
+ * @size: total size of buffer available.
+ * @return: length of string copied to buffer.
+ */
+static ssize_t aie_get_lock_status_str(struct aie_partition *apart,
+				       struct aie_location *loc, u32 status,
+				       u32 lock, char *buffer, ssize_t size)
+{
+	char **str = aie_lock_status_str;
+	u32 ttype, mask;
+	u8 value, shift;
+
+	ttype = aie_get_tile_type(apart->adev, loc);
+	if (ttype != AIE_TILE_TYPE_TILE) {
+		shift = lock * aie_pl_lock.sts.regoff;
+		mask = aie_pl_lock.sts.mask << shift;
+	} else {
+		shift = lock * aie_mem_lock.sts.regoff;
+		mask = aie_mem_lock.sts.mask << shift;
+	}
+
+	value = (status & mask) >> shift;
+
+	return scnprintf(buffer, max(0L, size), str[value]);
+}
+
+static ssize_t aie_get_tile_sysfs_lock_status(struct aie_partition *apart,
+					      struct aie_location *loc,
+					      char *buffer, ssize_t size)
+{
+	u32 i, ttype, num_locks;
+	unsigned long status;
+	ssize_t len = 0;
+
+	ttype = aie_get_tile_type(apart->adev, loc);
+	if (ttype == AIE_TILE_TYPE_SHIMPL)
+		return len;
+
+	if (ttype == AIE_TILE_TYPE_TILE)
+		num_locks = aie_mem_lock.num_locks;
+	else
+		num_locks = aie_pl_lock.num_locks;
+
+	if (!aie_part_check_clk_enable_loc(apart, loc)) {
+		for (i = 0; i < num_locks; i++) {
+			len += scnprintf(&buffer[len], max(0L, size - len),
+					 "%d: clock_gated\n", i);
+		}
+		return len;
+	}
+
+	status = aie_get_lock_status(apart, loc);
+	for (i = 0; i < num_locks; i++) {
+		len += scnprintf(&buffer[len], max(0L, size - len), "%d: ", i);
+		len += aie_get_lock_status_str(apart, loc, status, i,
+					       &buffer[len], size - len);
+		len += scnprintf(&buffer[len], max(0L, size - len), "\n");
+	}
+
+	return len;
+}
+
+static ssize_t aie_get_part_sysfs_lock_status(struct aie_partition *apart,
+					      struct aie_location *loc,
+					      char *buffer, ssize_t size)
+{
+	u32 i, ttype, num_locks;
+	unsigned long status;
+	ssize_t len = 0;
+
+	ttype = aie_get_tile_type(apart->adev, loc);
+	if (ttype == AIE_TILE_TYPE_SHIMPL)
+		return len;
+
+	if (!aie_part_check_clk_enable_loc(apart, loc)) {
+		len += scnprintf(&buffer[len], max(0L, size - len),
+				 "clock_gated");
+		return len;
+	}
+
+	if (ttype == AIE_TILE_TYPE_TILE)
+		num_locks = aie_mem_lock.num_locks;
+	else
+		num_locks = aie_pl_lock.num_locks;
+
+	status = aie_get_lock_status(apart, loc);
+	for (i = 0; i < num_locks; i++) {
+		len += aie_get_lock_status_str(apart, loc, status, i,
+					       &buffer[len], size - len);
+		if (i < num_locks - 1) {
+			len += scnprintf(&buffer[len], max(0L, size - len),
+					 DELIMITER_LEVEL0);
+		}
+	}
+	return len;
+}
+
+/*
+ * aie_get_tile_bd_attr() - gets tile bd attribute for AIE
+ * @apart: AI engine partition.
+ * @loc: location of AI engine DMA.
+ * @attr: pointer of attribute to assign
+ */
+static void aie_get_tile_bd_attr(struct aie_partition *apart,
+				 struct aie_location *loc,
+				 const struct aie_bd_attr **attr)
+{
+	u32 ttype;
+
+	ttype = aie_get_tile_type(apart->adev, loc);
+	if (ttype == AIE_TILE_TYPE_TILE)
+		*attr = &aie_tilebd;
+	else
+		*attr = &aie_shimbd;
+}
+
+/*
+ * aie_get_tile_dma_attr() - gets tile dma attribute for AIE
+ * @apart: AI engine partition.
+ * @loc: location of AI engine DMA.
+ * @attr: pointer of attribute to assign
+ */
+static void aie_get_tile_dma_attr(struct aie_partition *apart,
+				  struct aie_location *loc,
+				  const struct aie_dma_attr **attr)
+{
+	u32 ttype;
+
+	ttype = aie_get_tile_type(apart->adev, loc);
+	if (ttype == AIE_TILE_TYPE_TILE)
+		*attr = &aie_tiledma;
+	else
+		*attr = &aie_shimdma;
+}
+
+/**
+ * aie_get_dma_s2mm_status() - reads the DMA stream to memory map status.
+ * @apart: AI engine partition.
+ * @loc: location of AI engine DMA.
+ * @return: 32-bit register value.
+ */
+static u32 aie_get_dma_s2mm_status(struct aie_partition *apart,
+				   struct aie_location *loc)
+{
+	u32 stsoff, regoff, ttype;
+
+	ttype = aie_get_tile_type(apart->adev, loc);
+	if (ttype != AIE_TILE_TYPE_TILE)
+		stsoff = aie_shimdma.s2mm_sts_regoff;
+	else
+		stsoff = aie_tiledma.s2mm_sts_regoff;
+
+	regoff = aie_cal_regoff(apart->adev, *loc, stsoff);
+
+	return ioread32(apart->aperture->base + regoff);
+}
+
+/**
+ * aie_get_dma_mm2s_status() - reads the DMA memory map to stream status.
+ * @apart: AI engine partition.
+ * @loc: location of AI engine DMA.
+ * @return: 32-bit register value.
+ */
+static u32 aie_get_dma_mm2s_status(struct aie_partition *apart,
+				   struct aie_location *loc)
+{
+	u32 stsoff, regoff, ttype;
+
+	ttype = aie_get_tile_type(apart->adev, loc);
+	if (ttype != AIE_TILE_TYPE_TILE)
+		stsoff = aie_shimdma.mm2s_sts_regoff;
+	else
+		stsoff = aie_tiledma.mm2s_sts_regoff;
+
+	regoff = aie_cal_regoff(apart->adev, *loc, stsoff);
+
+	return ioread32(apart->aperture->base + regoff);
+}
+
+/**
+ * aie_get_chan_status() - reads the DMA channel status.
+ * @apart: AI engine partition.
+ * @loc: location of AI engine DMA.
+ * @status: status value of DMA.
+ * @chanid: DMA channel ID.
+ * @return: 8-bit status value.
+ */
+static u8 aie_get_chan_status(struct aie_partition *apart,
+			      struct aie_location *loc, u32 status, u8 chanid)
+{
+	const struct aie_single_reg_field *sts, *stall;
+	u32 mask, chan_shift, shift, value, ttype;
+
+	ttype = aie_get_tile_type(apart->adev, loc);
+	if (ttype != AIE_TILE_TYPE_TILE) {
+		sts = &aie_shimdma.sts;
+		stall = &aie_shimdma.stall;
+	} else {
+		sts = &aie_tiledma.sts;
+		stall = &aie_tiledma.stall;
+	}
+
+	/* Calculate channel status bit */
+	chan_shift = sts->regoff;
+	mask = sts->mask << (chan_shift * chanid);
+	shift = ffs(mask) - 1;
+	value = (status & mask) >> shift;
+
+	/* Calculate stall status bit */
+	chan_shift = stall->regoff;
+	mask = stall->mask << (chan_shift * chanid);
+	shift = ffs(mask) - 1;
+	value |= (status & mask) >> shift;
+
+	/* If invalid value set to "invalid_status" */
+	if (value >= ARRAY_SIZE(aie_dma_status_str))
+		value = ARRAY_SIZE(aie_dma_status_str) - 1;
+
+	return value;
+}
+
+/**
+ * aie_get_queue_size() - reads the DMA queue size.
+ * @apart: AI engine partition.
+ * @loc: location of AI engine DMA.
+ * @status: status value of DMA.
+ * @chanid: DMA channel ID.
+ * @return: 8-bit value.
+ */
+static u8 aie_get_queue_size(struct aie_partition *apart,
+			     struct aie_location *loc, u32 status, u8 chanid)
+{
+	const struct aie_single_reg_field *qsize;
+	u32 mask, chan_shift, shift, ttype;
+
+	ttype = aie_get_tile_type(apart->adev, loc);
+	if (ttype != AIE_TILE_TYPE_TILE)
+		qsize = &aie_shimdma.qsize;
+	else
+		qsize = &aie_tiledma.qsize;
+
+	/* Calculate queue size bit */
+	chan_shift = qsize->regoff;
+	mask = qsize->mask << (chan_shift * chanid);
+	shift = ffs(mask) - 1;
+
+	return (status & mask) >> shift;
+}
+
+/**
+ * aie_get_queue_status() - reads the DMA queue status.
+ * @apart: AI engine partition.
+ * @loc: location of AI engine DMA.
+ * @status: status value of DMA.
+ * @chanid: DMA channel ID.
+ * @return: 8-bit status value.
+ */
+static u8 aie_get_queue_status(struct aie_partition *apart,
+			       struct aie_location *loc, u32 status, u8 chanid)
+{
+	const struct aie_single_reg_field *qsts;
+	u32 mask, chan_shift, shift, ttype;
+
+	ttype = aie_get_tile_type(apart->adev, loc);
+	if (ttype != AIE_TILE_TYPE_TILE)
+		qsts = &aie_shimdma.qsts;
+	else
+		qsts = &aie_tiledma.qsts;
+
+	/* Get queue status bit */
+	chan_shift = qsts->regoff;
+	mask = qsts->mask << (chan_shift * chanid);
+	shift = ffs(mask) - 1;
+
+	return (status & mask) >> shift;
+}
+
+/**
+ * aie_get_current_bd() - reads the current buffer descriptor being processed
+ *			  by DMA channel.
+ * @apart: AI engine partition.
+ * @loc: location of AI engine DMA.
+ * @status: status value of DMA.
+ * @chanid: DMA channel ID.
+ * @return: 8-bit buffer descriptor value.
+ */
+static u8 aie_get_current_bd(struct aie_partition *apart,
+			     struct aie_location *loc, u32 status, u8 chanid)
+{
+	const struct aie_single_reg_field *curbd;
+	u32 mask, chan_shift, shift, ttype;
+
+	ttype = aie_get_tile_type(apart->adev, loc);
+	if (ttype != AIE_TILE_TYPE_TILE)
+		curbd = &aie_shimdma.curbd;
+	else
+		curbd = &aie_tiledma.curbd;
+
+	/* Get current buffer descriptor */
+	chan_shift = curbd->regoff;
+	mask = curbd->mask << (chan_shift * chanid);
+	shift = ffs(mask) - 1;
+
+	return (status & mask) >> shift;
+}
+
+/**
+ * aie_get_fifo_status() - reads the current value of DMA FIFO counters.
+ * @apart: AI engine partition.
+ * @loc: location of AI engine DMA.
+ * @return: concatenated value of counters for AIE tiles and 0 for shim tiles.
+ */
+static u32 aie_get_fifo_status(struct aie_partition *apart,
+			       struct aie_location *loc)
+{
+	u32 fifo_off, regoff, ttype;
+
+	ttype = aie_get_tile_type(apart->adev, loc);
+	if (ttype != AIE_TILE_TYPE_TILE)
+		return 0U;
+
+	fifo_off = aie_tiledma.fifo_cnt_regoff;
+
+	regoff = aie_cal_regoff(apart->adev, *loc, fifo_off);
+
+	return ioread32(apart->aperture->base + regoff);
+}
+
+/**
+ * aie_get_fifo_count() - returns the value of a DMA FIFO counter from its
+ *			  concatenated register value.
+ * @apart: AI engine partition.
+ * @status: register value of DMA FIFO counter.
+ * @counterid: counter ID.
+ * @return: DMA FIFO count.
+ */
+static u32 aie_get_fifo_count(struct aie_partition *apart, u32 status,
+			      u8 counterid)
+{
+	status >>= (aie_tiledma.fifo_cnt.regoff * counterid);
+
+	return (status & aie_tiledma.fifo_cnt.mask);
+}
+
+/**
+ * aie_get_part_sysfs_dma_status() - returns the status of DMA in string format
+ *				     with MM2S and S2MM type channel separated
+ *				     by a ',' symbol. Channels with a given
+ *				     type are separated by a '|' symbol.
+ * @apart: AI engine partition.
+ * @loc: location of AI engine DMA.
+ * @buffer: location to return DMA status string.
+ * @size: total size of buffer available.
+ * @return: length of string copied to buffer.
+ */
+static ssize_t aie_get_part_sysfs_dma_status(struct aie_partition *apart,
+					     struct aie_location *loc,
+					     char *buffer, ssize_t size)
+{
+	u32 i, ttype, num_s2mm_chan, num_mm2s_chan;
+	bool is_delimit_req = false;
+	unsigned long status;
+	ssize_t len = 0;
+
+	ttype = aie_get_tile_type(apart->adev, loc);
+	if (ttype == AIE_TILE_TYPE_SHIMPL)
+		return len;
+
+	if (!aie_part_check_clk_enable_loc(apart, loc)) {
+		len += scnprintf(buffer, max(0L, size - len),
+				 "mm2s: clock_gated%ss2mm: clock_gated",
+				 DELIMITER_LEVEL1);
+		return len;
+	}
+
+	if (ttype != AIE_TILE_TYPE_TILE) {
+		num_mm2s_chan = aie_shimdma.num_mm2s_chan;
+		num_s2mm_chan = aie_shimdma.num_s2mm_chan;
+	} else {
+		num_mm2s_chan = aie_tiledma.num_mm2s_chan;
+		num_s2mm_chan = aie_tiledma.num_s2mm_chan;
+	}
+
+	/* MM2S */
+	len += scnprintf(&buffer[len], max(0L, size - len), "mm2s: ");
+	status = aie_get_dma_mm2s_status(apart, loc);
+
+	for (i = 0; i < num_mm2s_chan; i++) {
+		u32 value = aie_get_chan_status(apart, loc, status, i);
+
+		if (is_delimit_req) {
+			len += scnprintf(&buffer[len], max(0L, size - len),
+					 DELIMITER_LEVEL0);
+		}
+		len += scnprintf(&buffer[len], max(0L, size - len),
+				 aie_dma_status_str[value]);
+		is_delimit_req = true;
+	}
+
+	/* S2MM */
+	is_delimit_req = false;
+	len += scnprintf(&buffer[len], max(0L, size - len), "%ss2mm: ",
+			 DELIMITER_LEVEL1);
+	status = aie_get_dma_s2mm_status(apart, loc);
+
+	for (i = 0; i < num_s2mm_chan; i++) {
+		u32 value = aie_get_chan_status(apart, loc, status, i);
+
+		if (is_delimit_req) {
+			len += scnprintf(&buffer[len], max(0L, size - len),
+					 DELIMITER_LEVEL0);
+		}
+		len += scnprintf(&buffer[len], max(0L, size - len),
+				 aie_dma_status_str[value]);
+		is_delimit_req = true;
+	}
+	return len;
+}
+
+/*
+ * aie_get_tile_sysfs_dma_status() - exports AI engine DMA channel status,
+ *				     queue size, queue status, and current
+ *				     buffer descriptor ID being processed by
+ *				     DMA channel to a tile level sysfs node.
+ * @apart: AI engine partition.
+ * @loc: location of AI engine DMA.
+ * @buffer: location to return DMA status string.
+ * @size: total size of buffer available.
+ * @return: length of string copied to buffer.
+ */
+static ssize_t aie_get_tile_sysfs_dma_status(struct aie_partition *apart,
+					     struct aie_location *loc,
+					     char *buffer, ssize_t size)
+{
+	u32 ttype, chan, mm2s, s2mm, num_s2mm_chan, num_mm2s_chan, fifo;
+	char **qsts_str = aie_queue_status_str;
+	bool is_delimit_req = false;
+	ssize_t len = 0;
+
+	if (!aie_part_check_clk_enable_loc(apart, loc)) {
+		len += scnprintf(&buffer[len], max(0L, size - len),
+				 "channel_status: mm2s: clock_gated%ss2mm: clock_gated\n",
+				 DELIMITER_LEVEL1);
+		len += scnprintf(&buffer[len], max(0L, size - len),
+				 "queue_size: mm2s: clock_gated%ss2mm: clock_gated\n",
+				 DELIMITER_LEVEL1);
+		len += scnprintf(&buffer[len], max(0L, size - len),
+				 "queue_status: mm2s: clock_gated%ss2mm: clock_gated\n",
+				 DELIMITER_LEVEL1);
+		len += scnprintf(&buffer[len], max(0L, size - len),
+				 "current_bd: mm2s: clock_gated%ss2mm: clock_gated\n",
+				 DELIMITER_LEVEL1);
+		len += scnprintf(&buffer[len], max(0L, size - len),
+				 "fifo_len: clock_gated\n");
+		return len;
+	}
+
+	ttype = aie_get_tile_type(apart->adev, loc);
+	if (ttype != AIE_TILE_TYPE_TILE) {
+		num_mm2s_chan = aie_shimdma.num_mm2s_chan;
+		num_s2mm_chan = aie_shimdma.num_s2mm_chan;
+	} else {
+		num_mm2s_chan = aie_tiledma.num_mm2s_chan;
+		num_s2mm_chan = aie_tiledma.num_s2mm_chan;
+	}
+
+	len += scnprintf(&buffer[len], max(0L, size - len), "channel_status: ");
+	len += aie_get_part_sysfs_dma_status(apart, loc, &buffer[len],
+					     max(0L, size - len));
+
+	mm2s = aie_get_dma_mm2s_status(apart, loc);
+	s2mm = aie_get_dma_s2mm_status(apart, loc);
+
+	/* Queue size */
+	len += scnprintf(&buffer[len], max(0L, size - len),
+			 "\nqueue_size: mm2s: ");
+
+	for (chan = 0; chan < num_mm2s_chan; chan++) {
+		if (is_delimit_req) {
+			len += scnprintf(&buffer[len], max(0L, size - len),
+					DELIMITER_LEVEL0);
+		}
+
+		len += scnprintf(&buffer[len], max(0L, size - len), "%d",
+				 aie_get_queue_size(apart, loc, mm2s, chan));
+		is_delimit_req = true;
+	}
+
+	len += scnprintf(&buffer[len], max(0L, size - len), "%ss2mm: ",
+			 DELIMITER_LEVEL1);
+
+	is_delimit_req = false;
+	for (chan = 0; chan < num_s2mm_chan; chan++) {
+		if (is_delimit_req) {
+			len += scnprintf(&buffer[len], max(0L, size - len),
+					DELIMITER_LEVEL0);
+		}
+
+		len += scnprintf(&buffer[len], max(0L, size - len), "%d",
+				 aie_get_queue_size(apart, loc, s2mm, chan));
+		is_delimit_req = true;
+	}
+
+	/* Queue status */
+	len += scnprintf(&buffer[len], max(0L, size - len),
+			 "\nqueue_status: mm2s: ");
+
+	is_delimit_req = false;
+	for (chan = 0; chan < num_mm2s_chan; chan++) {
+		if (is_delimit_req) {
+			len += scnprintf(&buffer[len], max(0L, size - len),
+					DELIMITER_LEVEL0);
+		}
+
+		len += scnprintf(&buffer[len], max(0L, size - len),
+				 qsts_str[aie_get_queue_status(apart, loc, mm2s,
+					  chan)]);
+		is_delimit_req = true;
+	}
+
+	len += scnprintf(&buffer[len], max(0L, size - len), "%ss2mm: ",
+			 DELIMITER_LEVEL1);
+
+	is_delimit_req = false;
+	for (chan = 0; chan < num_s2mm_chan; chan++) {
+		if (is_delimit_req) {
+			len += scnprintf(&buffer[len], max(0L, size - len),
+					DELIMITER_LEVEL0);
+		}
+
+		len += scnprintf(&buffer[len], max(0L, size - len),
+				 qsts_str[aie_get_queue_status(apart, loc, s2mm,
+					  chan)]);
+		is_delimit_req = true;
+	}
+
+	/* Current BD */
+	len += scnprintf(&buffer[len], max(0L, size - len),
+			 "\ncurrent_bd: mm2s: ");
+
+	is_delimit_req = false;
+	for (chan = 0; chan < num_mm2s_chan; chan++) {
+		if (is_delimit_req) {
+			len += scnprintf(&buffer[len], max(0L, size - len),
+					DELIMITER_LEVEL0);
+		}
+
+		len += scnprintf(&buffer[len], max(0L, size - len), "%d",
+				 aie_get_current_bd(apart, loc, mm2s, chan));
+		is_delimit_req = true;
+	}
+
+	len += scnprintf(&buffer[len], max(0L, size - len), "%ss2mm: ",
+			 DELIMITER_LEVEL1);
+
+	is_delimit_req = false;
+	for (chan = 0; chan < num_s2mm_chan; chan++) {
+		if (is_delimit_req) {
+			len += scnprintf(&buffer[len], max(0L, size - len),
+					DELIMITER_LEVEL0);
+		}
+
+		len += scnprintf(&buffer[len], max(0L, size - len), "%d",
+				 aie_get_current_bd(apart, loc, s2mm, chan));
+		is_delimit_req = true;
+	}
+
+	/* FIFO length */
+	len += scnprintf(&buffer[len], max(0L, size - len), "\nfifo_len: ");
+
+	fifo = aie_get_fifo_status(apart, loc);
+	len += scnprintf(&buffer[len], max(0L, size - len), "%d%s%d\n",
+			 aie_get_fifo_count(apart, fifo, 0), DELIMITER_LEVEL0,
+			 aie_get_fifo_count(apart, fifo, 1));
+	return len;
+}
+
+/**
+ * aie_get_tile_sysfs_bd_metadata() - exports AI engine DMA buffer descriptor
+ *				      metadata for all buffer descriptors to
+ *				      a tile level sysfs node.
+ * @apart: AI engine partition.
+ * @loc: location of AI engine DMA buffer descriptors.
+ * @buffer: location to return DMA buffer descriptor metadata string.
+ * @size: total size of buffer available.
+ * @return: length of string copied to buffer.
+ */
+static ssize_t aie_get_tile_sysfs_bd_metadata(struct aie_partition *apart,
+					      struct aie_location *loc,
+					      char *buffer, ssize_t size)
+{
+	const struct aie_dma_attr *dma_attr;
+	const struct aie_bd_attr *bd_attr;
+	u32 enabled, ttype;
+	ssize_t len = 0;
+
+	aie_get_tile_dma_attr(apart, loc, &dma_attr);
+	aie_get_tile_bd_attr(apart, loc, &bd_attr);
+
+	ttype = aie_get_tile_type(apart->adev, loc);
+	enabled = aie_part_check_clk_enable_loc(apart, loc);
+	for (u32 bd = 0; bd < dma_attr->num_bds; bd++) {
+		u32 bd_data[AIE_MAX_BD_SIZE];
+		u32 i, index, base_bdoff;
+		u64 value;
+
+		len += scnprintf(&buffer[len], max(0L, size - len),
+				 "%d: ", bd);
+		if (!enabled) {
+			len += scnprintf(&buffer[len], max(0L, size - len),
+					 "clock_gated\n");
+			continue;
+		}
+
+		base_bdoff = dma_attr->bd_regoff + (bd_attr->bd_idx_off * bd);
+		memset(bd_data, 0, sizeof(bd_data));
+		for (i = 0; i < dma_attr->bd_len / sizeof(u32); i++) {
+			u32 regoff;
+
+			regoff = aie_cal_regoff(apart->adev, *loc,
+						base_bdoff + (i * 4U));
+			bd_data[i] = ioread32(apart->aperture->base + regoff);
+		}
+
+		/* address and length */
+		if (ttype == AIE_TILE_TYPE_TILE) {
+			index = bd_attr->addr.addr.regoff / sizeof(u32);
+			value = aie_get_reg_field(&bd_attr->addr.addr,
+						  bd_data[index]);
+			len += scnprintf(&buffer[len], max(0L, size - len),
+					 "%llx%s", value, DELIMITER_LEVEL0);
+			index = bd_attr->addr_2.addr.regoff / sizeof(u32);
+			value = aie_get_reg_field(&bd_attr->addr_2.addr,
+						  bd_data[index]);
+			len += scnprintf(&buffer[len], max(0L, size - len),
+					 "%llx%s", value, DELIMITER_LEVEL0);
+		} else {
+			u32 h_addr;
+
+			index = bd_attr->addr.addr.regoff / sizeof(u32);
+			value = aie_get_reg_field(&bd_attr->addr.addr,
+						  bd_data[index]);
+			h_addr = bd_data[bd_attr->addr_2.addr.regoff / sizeof(u32)];
+			h_addr = aie_get_reg_field(&bd_attr->addr_2.addr, h_addr);
+			value |= (u64)h_addr << 32;
+			len += scnprintf(&buffer[len], max(0L, size - len),
+					 "%llx%s", value, DELIMITER_LEVEL0);
+		}
+
+		index = bd_attr->addr.length.regoff / sizeof(u32);
+		value = aie_get_reg_field(&bd_attr->addr.length, bd_data[index]);
+		len += scnprintf(&buffer[len], max(0L, size - len), "%lld%s",
+				 value, DELIMITER_LEVEL0);
+
+		/* locks */
+		index = bd_attr->lock.lock_acq_id.regoff / sizeof(u32);
+		value = aie_get_reg_field(&bd_attr->lock.lock_acq_id,
+					  bd_data[index]);
+		len += scnprintf(&buffer[len], max(0L, size - len), "%lld%s",
+				 value, DELIMITER_LEVEL0);
+		value = aie_get_reg_field(&bd_attr->lock.lock_acq_val,
+					  bd_data[index]);
+		len += scnprintf(&buffer[len], max(0L, size - len), "%lld%s",
+				 value, DELIMITER_LEVEL0);
+		value = aie_get_reg_field(&bd_attr->lock.lock_acq_en,
+					  bd_data[index]);
+		len += scnprintf(&buffer[len], max(0L, size - len), "%lld%s",
+				 value, DELIMITER_LEVEL0);
+		value = aie_get_reg_field(&bd_attr->lock.lock_acq_val_en,
+					  bd_data[index]);
+		len += scnprintf(&buffer[len], max(0L, size - len), "%lld%s",
+				 value, DELIMITER_LEVEL0);
+		value = aie_get_reg_field(&bd_attr->lock.lock_rel_val,
+					  bd_data[index]);
+		len += scnprintf(&buffer[len], max(0L, size - len), "%lld%s",
+				 value, DELIMITER_LEVEL0);
+		value = aie_get_reg_field(&bd_attr->lock.lock_rel_en,
+					  bd_data[index]);
+		len += scnprintf(&buffer[len], max(0L, size - len), "%lld%s",
+				 value, DELIMITER_LEVEL0);
+		value = aie_get_reg_field(&bd_attr->lock.lock_rel_val_en,
+					  bd_data[index]);
+		len += scnprintf(&buffer[len], max(0L, size - len), "%lld%s",
+				 value, DELIMITER_LEVEL0);
+
+		if (ttype == AIE_TILE_TYPE_TILE) {
+			index = bd_attr->lock_2.lock_acq_id.regoff / sizeof(u32);
+			value = aie_get_reg_field(&bd_attr->lock_2.lock_acq_id,
+						  bd_data[index]);
+			len += scnprintf(&buffer[len], max(0L, size - len),
+					 "%lld%s", value, DELIMITER_LEVEL0);
+			value = aie_get_reg_field(&bd_attr->lock_2.lock_acq_val,
+						  bd_data[index]);
+			len += scnprintf(&buffer[len], max(0L, size - len),
+					 "%lld%s", value, DELIMITER_LEVEL0);
+			value = aie_get_reg_field(&bd_attr->lock_2.lock_acq_en,
+						  bd_data[index]);
+			len += scnprintf(&buffer[len], max(0L, size - len),
+					 "%lld%s", value, DELIMITER_LEVEL0);
+			value = aie_get_reg_field(&bd_attr->lock_2.lock_acq_val_en,
+						  bd_data[index]);
+			len += scnprintf(&buffer[len], max(0L, size - len),
+					 "%lld%s", value, DELIMITER_LEVEL0);
+			value = aie_get_reg_field(&bd_attr->lock_2.lock_rel_val,
+						  bd_data[index]);
+			len += scnprintf(&buffer[len], max(0L, size - len),
+					 "%lld%s", value, DELIMITER_LEVEL0);
+			value = aie_get_reg_field(&bd_attr->lock_2.lock_rel_en,
+						  bd_data[index]);
+			len += scnprintf(&buffer[len], max(0L, size - len),
+					 "%lld%s", value, DELIMITER_LEVEL0);
+			value = aie_get_reg_field(&bd_attr->lock_2.lock_rel_val_en,
+						  bd_data[index]);
+			len += scnprintf(&buffer[len], max(0L, size - len),
+					 "%lld%s", value, DELIMITER_LEVEL0);
+		}
+
+		/* packet */
+		index = bd_attr->packet.pkt_en.regoff / sizeof(u32);
+		value = aie_get_reg_field(&bd_attr->packet.pkt_en,
+					  bd_data[index]);
+		len += scnprintf(&buffer[len], max(0L, size - len), "%lld%s",
+				 value, DELIMITER_LEVEL0);
+		index = bd_attr->packet.pkt_id.regoff / sizeof(u32);
+		value = aie_get_reg_field(&bd_attr->packet.pkt_id,
+					  bd_data[index]);
+		len += scnprintf(&buffer[len], max(0L, size - len), "%lld%s",
+				 value, DELIMITER_LEVEL0);
+		index = bd_attr->packet.pkt_type.regoff / sizeof(u32);
+		value = aie_get_reg_field(&bd_attr->packet.pkt_type,
+					  bd_data[index]);
+		len += scnprintf(&buffer[len], max(0L, size - len), "%lld%s",
+				 value, DELIMITER_LEVEL0);
+
+		/* control */
+		index = bd_attr->valid_bd.regoff / sizeof(u32);
+		value = aie_get_reg_field(&bd_attr->valid_bd, bd_data[index]);
+		len += scnprintf(&buffer[len], max(0L, size - len), "%lld%s",
+				 value, DELIMITER_LEVEL0);
+		index = bd_attr->use_next.regoff / sizeof(u32);
+		value = aie_get_reg_field(&bd_attr->use_next, bd_data[index]);
+		len += scnprintf(&buffer[len], max(0L, size - len), "%lld%s",
+				 value, DELIMITER_LEVEL0);
+		index = bd_attr->next_bd.regoff / sizeof(u32);
+		value = aie_get_reg_field(&bd_attr->next_bd, bd_data[index]);
+		len += scnprintf(&buffer[len], max(0L, size - len), "%lld%s",
+				 value, DELIMITER_LEVEL0);
+
+		/* axi settings */
+		if (ttype == AIE_TILE_TYPE_SHIMNOC) {
+			index = bd_attr->axi.smid.regoff / sizeof(u32);
+			value = aie_get_reg_field(&bd_attr->axi.smid,
+						  bd_data[index]);
+			len += scnprintf(&buffer[len], max(0L, size - len),
+					 "%lld%s", value, DELIMITER_LEVEL0);
+			value = aie_get_reg_field(&bd_attr->axi.cache,
+						  bd_data[index]);
+			len += scnprintf(&buffer[len], max(0L, size - len),
+					 "%lld%s", value, DELIMITER_LEVEL0);
+			value = aie_get_reg_field(&bd_attr->axi.qos,
+						  bd_data[index]);
+			len += scnprintf(&buffer[len], max(0L, size - len),
+					 "%lld%s", value, DELIMITER_LEVEL0);
+			value = aie_get_reg_field(&bd_attr->axi.secure_en,
+						  bd_data[index]);
+			len += scnprintf(&buffer[len], max(0L, size - len),
+					 "%lld%s", value, DELIMITER_LEVEL0);
+			value = aie_get_reg_field(&bd_attr->axi.burst_len,
+						  bd_data[index]);
+			len += scnprintf(&buffer[len], max(0L, size - len),
+					 "%lld\n", value);
+			continue;
+		}
+
+		index = bd_attr->buf_sel.regoff / sizeof(u32);
+		value = aie_get_reg_field(&bd_attr->buf_sel, bd_data[index]);
+		len += scnprintf(&buffer[len], max(0L, size - len), "%lld%s",
+				 value, DELIMITER_LEVEL0);
+		index = bd_attr->curr_ptr.regoff / sizeof(u32);
+		value = aie_get_reg_field(&bd_attr->curr_ptr, bd_data[index]);
+		len += scnprintf(&buffer[len], max(0L, size - len), "%lld%s",
+				 value, DELIMITER_LEVEL0);
+		index = bd_attr->double_buff_en.regoff / sizeof(u32);
+		value = aie_get_reg_field(&bd_attr->double_buff_en,
+					  bd_data[index]);
+		len += scnprintf(&buffer[len], max(0L, size - len), "%lld%s",
+				 value, DELIMITER_LEVEL0);
+		index = bd_attr->interleave_en.regoff / sizeof(u32);
+		value = aie_get_reg_field(&bd_attr->interleave_en,
+					  bd_data[index]);
+		len += scnprintf(&buffer[len], max(0L, size - len), "%lld%s",
+				 value, DELIMITER_LEVEL0);
+		index = bd_attr->interleave_cnt.regoff / sizeof(u32);
+		value = aie_get_reg_field(&bd_attr->interleave_cnt,
+					  bd_data[index]);
+		len += scnprintf(&buffer[len], max(0L, size - len), "%lld%s",
+				 value, DELIMITER_LEVEL0);
+		index = bd_attr->fifo_mode.regoff / sizeof(u32);
+		value = aie_get_reg_field(&bd_attr->fifo_mode, bd_data[index]);
+		len += scnprintf(&buffer[len], max(0L, size - len), "%lld%s",
+				 value, DELIMITER_LEVEL0);
+
+		/* dimensions */
+		index = bd_attr->aie_dim.x_incr.regoff / sizeof(u32);
+		value = aie_get_reg_field(&bd_attr->aie_dim.x_incr,
+					  bd_data[index]);
+		len += scnprintf(&buffer[len], max(0L, size - len), "%lld%s",
+				 value, DELIMITER_LEVEL0);
+		value = aie_get_reg_field(&bd_attr->aie_dim.x_wrap,
+					  bd_data[index]);
+		len += scnprintf(&buffer[len], max(0L, size - len), "%lld%s",
+				 value, DELIMITER_LEVEL0);
+		value = aie_get_reg_field(&bd_attr->aie_dim.x_off,
+					  bd_data[index]);
+		len += scnprintf(&buffer[len], max(0L, size - len), "%lld%s",
+				 value, DELIMITER_LEVEL0);
+		index = bd_attr->aie_dim.y_incr.regoff / sizeof(u32);
+		value = aie_get_reg_field(&bd_attr->aie_dim.y_incr,
+					  bd_data[index]);
+		len += scnprintf(&buffer[len], max(0L, size - len), "%lld%s",
+				 value, DELIMITER_LEVEL0);
+		value = aie_get_reg_field(&bd_attr->aie_dim.y_wrap,
+					  bd_data[index]);
+		len += scnprintf(&buffer[len], max(0L, size - len), "%lld%s",
+				 value, DELIMITER_LEVEL0);
+		value = aie_get_reg_field(&bd_attr->aie_dim.y_off,
+					  bd_data[index]);
+		len += scnprintf(&buffer[len], max(0L, size - len), "%lld\n",
+				 value);
+	}
+
+	return len;
 }
 
 static const struct aie_tile_operations aie_ops = {
 	.get_tile_type = aie_get_tile_type,
 	.get_mem_info = aie_get_mem_info,
 	.get_core_status = aie_get_core_status,
-	.reset_shim = aie_reset_shim,
+	.get_part_sysfs_lock_status = aie_get_part_sysfs_lock_status,
+	.get_tile_sysfs_lock_status = aie_get_tile_sysfs_lock_status,
+	.get_part_sysfs_dma_status = aie_get_part_sysfs_dma_status,
+	.get_tile_sysfs_dma_status = aie_get_tile_sysfs_dma_status,
+	.get_tile_sysfs_bd_metadata = aie_get_tile_sysfs_bd_metadata,
 	.init_part_clk_state = aie_init_part_clk_state,
 	.scan_part_clocks = aie_scan_part_clocks,
 	.set_part_clocks = aie_set_part_clocks,
+	.set_tile_isolation = aie_set_tile_isolation,
 	.mem_clear = aie_part_clear_mems,
 };
 
@@ -1314,12 +2470,12 @@ static void aie_device_init_rscs_attr(struct aie_device *adev)
 	struct aie_tile_attr *tattr;
 
 	tattr = &adev->ttype_attr[AIE_TILE_TYPE_TILE];
-	tattr->num_mods = 2;
+	tattr->num_mods = NUM_MODS_CORE_TILE;
 	tattr->rscs_attr = aie_core_tile_rscs_attr;
 	tattr->mods = aie_core_tile_module_types;
 
 	tattr = &adev->ttype_attr[AIE_TILE_TYPE_SHIMPL];
-	tattr->num_mods = 1;
+	tattr->num_mods = NUM_MODS_SHIMPL_TILE;
 	tattr->rscs_attr = aie_shimpl_tile_rscs_attr;
 	tattr->mods = aie_shimpl_tile_module_types;
 
@@ -1329,7 +2485,7 @@ static void aie_device_init_rscs_attr(struct aie_device *adev)
 	 * driver yet.
 	 */
 	tattr = &adev->ttype_attr[AIE_TILE_TYPE_SHIMNOC];
-	tattr->num_mods = 1;
+	tattr->num_mods = NUM_MODS_SHIMPL_TILE;
 	tattr->rscs_attr = aie_shimpl_tile_rscs_attr;
 	tattr->mods = aie_shimpl_tile_module_types;
 }
@@ -1352,10 +2508,12 @@ int aie_device_init(struct aie_device *adev)
 	adev->ops = &aie_ops;
 	adev->num_kernel_regs = ARRAY_SIZE(aie_kernel_regs);
 	adev->kernel_regs = aie_kernel_regs;
-	adev->num_core_regs = ARRAY_SIZE(aie_core_regs);
-	adev->core_regs = aie_core_regs;
+	adev->core_regs_clr = aie_core_regs_clr;
+	adev->num_core_regs_clr = ARRAY_SIZE(aie_core_regs_clr);
 	adev->col_rst = &aie_col_rst;
 	adev->col_clkbuf = &aie_col_clkbuf;
+	adev->shim_bd = &aie_shimbd;
+	adev->tile_bd = &aie_tilebd;
 	adev->shim_dma = &aie_shimdma;
 	adev->tile_dma = &aie_tiledma;
 	adev->pl_events = &aie_pl_event;
@@ -1366,17 +2524,13 @@ int aie_device_init(struct aie_device *adev)
 	adev->core_errors = &aie_core_error;
 	adev->mem_errors = &aie_mem_error;
 	adev->shim_errors = &aie_shim_error;
+	adev->aperture_sysfs_attr = &aie_aperture_sysfs_attr;
 	adev->part_sysfs_attr = &aie_part_sysfs_attr;
 	adev->tile_sysfs_attr = &aie_tile_sysfs_attr;
 	adev->core_status_str = aie_core_status_str;
 	adev->core_pc = &aie_core_pc;
 	adev->core_lr = &aie_core_lr;
 	adev->core_sp = &aie_core_sp;
-	adev->dma_status_str = aie_dma_status_str;
-	adev->queue_status_str = aie_queue_status_str;
-	adev->pl_lock = &aie_pl_lock;
-	adev->mem_lock = &aie_mem_lock;
-	adev->lock_status_str = aie_lock_status_str;
 
 	aie_device_init_rscs_attr(adev);
 

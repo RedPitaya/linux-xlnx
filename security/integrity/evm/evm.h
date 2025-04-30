@@ -38,9 +38,6 @@ extern int evm_initialized;
 
 extern int evm_hmac_attrs;
 
-extern struct crypto_shash *hmac_tfm;
-extern struct crypto_shash *hash_tfm;
-
 /* List of EVM protected security xattrs */
 extern struct list_head evm_config_xattrnames;
 
@@ -48,6 +45,8 @@ struct evm_digest {
 	struct ima_digest_data hdr;
 	char digest[IMA_MAX_DIGEST_SIZE];
 } __packed;
+
+int evm_protected_xattr(const char *req_xattr_name);
 
 int evm_init_key(void);
 int evm_update_evmxattr(struct dentry *dentry,
@@ -61,7 +60,7 @@ int evm_calc_hash(struct dentry *dentry, const char *req_xattr_name,
 		  const char *req_xattr_value,
 		  size_t req_xattr_value_len, char type,
 		  struct evm_digest *data);
-int evm_init_hmac(struct inode *inode, const struct xattr *xattr,
+int evm_init_hmac(struct inode *inode, const struct xattr *xattrs,
 		  char *hmac_val);
 int evm_init_secfs(void);
 

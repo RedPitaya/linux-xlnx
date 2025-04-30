@@ -95,6 +95,7 @@ struct xlnx_pcm_drv_data {
 	struct clk *mm2s_axis_clk;
 	struct clk *s2mm_axis_clk;
 	struct clk *aud_mclk;
+	unsigned int sysclk;
 };
 
 /*
@@ -325,6 +326,15 @@ static irqreturn_t xlnx_s2mm_irq_handler(int irq, void *arg)
 	return IRQ_NONE;
 }
 
+static int xlnx_formatter_set_sysclk(struct snd_soc_component *component,
+				     int clk_id, int source, unsigned int freq, int dir)
+{
+	struct xlnx_pcm_drv_data *adata = dev_get_drvdata(component->dev);
+
+	adata->sysclk = freq;
+	return 0;
+}
+
 static int xlnx_formatter_pcm_open(struct snd_soc_component *component,
 				   struct snd_pcm_substream *substream)
 {
@@ -485,6 +495,19 @@ static int xlnx_formatter_pcm_hw_params(struct snd_soc_component *component,
 	if (active_ch > stream_data->ch_limit)
 		return -EINVAL;
 
+	if (substream->stream == SNDRV_PCM_STREAM_PLAYBACK &&
+	    adata->sysclk) {
+		unsigned int mclk_fs = adata->sysclk / params_rate(params);
+
+		if (adata->sysclk % params_rate(params) != 0) {
+			dev_warn(component->dev, "sysclk %u not divisible by rate %u\n",
+				 adata->sysclk, params_rate(params));
+			return -EINVAL;
+		}
+
+		writel(mclk_fs, stream_data->mmio + XLNX_AUD_FS_MULTIPLIER);
+	}
+
 	if (substream->stream == SNDRV_PCM_STREAM_CAPTURE &&
 	    stream_data->xfer_mode == AES_TO_PCM &&
 	    ((strstr(adata->nodes[XLNX_CAPTURE]->name, "hdmi")) ||
@@ -607,6 +630,7 @@ static int xlnx_formatter_pcm_new(struct snd_soc_component *component,
 
 static const struct snd_soc_component_driver xlnx_asoc_component = {
 	.name		= DRV_NAME,
+	.set_sysclk	= xlnx_formatter_set_sysclk,
 	.open		= xlnx_formatter_pcm_open,
 	.close		= xlnx_formatter_pcm_close,
 	.hw_params	= xlnx_formatter_pcm_hw_params,
@@ -828,7 +852,7 @@ clk_err:
 	return ret;
 }
 
-static int xlnx_formatter_pcm_remove(struct platform_device *pdev)
+static void xlnx_formatter_pcm_remove(struct platform_device *pdev)
 {
 	int ret = 0;
 	struct xlnx_pcm_drv_data *adata = dev_get_drvdata(&pdev->dev);
@@ -846,7 +870,6 @@ static int xlnx_formatter_pcm_remove(struct platform_device *pdev)
 		dev_err(&pdev->dev, "audio formatter reset failed\n");
 
 	clk_disable_unprepare(adata->axi_clk);
-	return ret;
 }
 
 static const struct of_device_id xlnx_formatter_pcm_of_match[] = {
@@ -857,7 +880,7 @@ MODULE_DEVICE_TABLE(of, xlnx_formatter_pcm_of_match);
 
 static struct platform_driver xlnx_formatter_pcm_driver = {
 	.probe	= xlnx_formatter_pcm_probe,
-	.remove	= xlnx_formatter_pcm_remove,
+	.remove_new = xlnx_formatter_pcm_remove,
 	.driver	= {
 		.name	= DRV_NAME,
 		.of_match_table	= xlnx_formatter_pcm_of_match,
@@ -865,5 +888,7 @@ static struct platform_driver xlnx_formatter_pcm_driver = {
 };
 
 module_platform_driver(xlnx_formatter_pcm_driver);
+
+MODULE_DESCRIPTION("ASoC driver for Xilinx audio formatter");
 MODULE_AUTHOR("Maruthi Srinivas Bayyavarapu <maruthis@xilinx.com>");
 MODULE_LICENSE("GPL v2");

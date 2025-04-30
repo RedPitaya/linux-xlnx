@@ -10,6 +10,7 @@
 #include <asm/mmu.h>
 #include <asm/setup.h>
 #include <asm/smp.h>
+#include <asm/firmware.h>
 
 #include <linux/pkeys.h>
 #include <linux/of_fdt.h>
@@ -66,7 +67,7 @@ static int __init dt_scan_storage_keys(unsigned long node,
 	return 1;
 }
 
-static int scan_pkey_feature(void)
+static int __init scan_pkey_feature(void)
 {
 	int ret;
 	int pkeys_total = 0;
@@ -290,7 +291,7 @@ void setup_kuap(bool disabled)
 
 	if (smp_processor_id() == boot_cpuid) {
 		pr_info("Activating Kernel Userspace Access Prevention\n");
-		cur_cpu_spec->mmu_features |= MMU_FTR_BOOK3S_KUAP;
+		cur_cpu_spec->mmu_features |= MMU_FTR_KUAP;
 	}
 
 	/*

@@ -3,11 +3,14 @@
  * Xilinx AI Engine partition driver
  *
  * Copyright (C) 2022 Xilinx, Inc.
+ * Copyright (C) 2023 Advanced Micro Devices, Inc.
  */
 
 #include <linux/bitmap.h>
 #include <linux/device.h>
 #include <linux/firmware/xlnx-zynqmp.h>
+#include <linux/firmware/xlnx-versal-error-events.h>
+#include <linux/firmware/xlnx-event-manager.h>
 #include <linux/kernel.h>
 #include <linux/list.h>
 #include <linux/mutex.h>
@@ -41,18 +44,13 @@ unsigned int aie_aperture_get_num_parts(struct aie_aperture *aperture)
 {
 	struct aie_partition *apart;
 	int ret;
-	unsigned int rs, re, num_parts = 0;
+	unsigned int num_parts = 0;
 
 	ret = mutex_lock_interruptible(&aperture->mlock);
 	if (ret)
 		return ret;
 
 	list_for_each_entry(apart, &aperture->partitions, node) {
-		num_parts++;
-	}
-
-	bitmap_for_each_clear_region(aperture->cols_res.bitmap, rs, re, 0,
-				     (aperture->range.size.col - 1)) {
 		num_parts++;
 	}
 
@@ -123,8 +121,8 @@ int aie_aperture_enquire_parts(struct aie_aperture *aperture,
 		num_queries_left--;
 	}
 
-	bitmap_for_each_clear_region(aperture->cols_res.bitmap, rs, re, 0,
-				     (aperture->range.size.col - 1)) {
+	for_each_clear_bitrange(rs, re, aperture->cols_res.bitmap,
+				(aperture->range.size.col - 1)) {
 		struct aie_range_args query;
 
 		if (!num_queries_left) {
@@ -281,7 +279,7 @@ static void aie_aperture_release_device(struct device *dev)
 	struct aie_aperture *aperture = dev_get_drvdata(dev);
 
 	aie_resource_uninitialize(&aperture->cols_res);
-	aie_resource_uninitialize(&aperture->l2_mask);
+	kfree(aperture->l2_mask.val);
 	zynqmp_pm_release_node(aperture->node_id);
 	kfree(aperture);
 }
@@ -295,8 +293,10 @@ static void aie_aperture_release_device(struct device *dev)
  */
 int aie_aperture_remove(struct aie_aperture *aperture)
 {
-	struct list_head *node, *pos;
+	struct list_head *node, *pos, tmp;
 	int ret;
+
+	INIT_LIST_HEAD(&tmp);
 
 	ret = mutex_lock_interruptible(&aperture->mlock);
 	if (ret)
@@ -307,10 +307,30 @@ int aie_aperture_remove(struct aie_aperture *aperture)
 
 		apart = list_entry(pos, struct aie_partition, node);
 		list_del(&apart->node);
-		aie_part_remove(apart);
+		list_add_tail(&apart->node, &tmp);
 	}
 	mutex_unlock(&aperture->mlock);
 
+	list_for_each_safe(pos, node, &tmp) {
+		struct aie_partition *apart;
+
+		apart = list_entry(pos, struct aie_partition, node);
+		aie_part_remove(apart);
+	}
+
+	ret = mutex_lock_interruptible(&aperture->mlock);
+	if (ret)
+		return ret;
+
+	if (aperture->adev->device_name == AIE_DEV_GEN_S100 ||
+	    aperture->adev->device_name == AIE_DEV_GEN_S200) {
+		xlnx_unregister_event(PM_NOTIFY_CB, VERSAL_EVENT_ERROR_PMC_ERR1,
+				      XPM_VERSAL_EVENT_ERROR_MASK_AIE_CR,
+				      aie_interrupt_callback, aperture);
+	}
+	mutex_unlock(&aperture->mlock);
+
+	aie_aperture_sysfs_remove_entries(aperture);
 	of_node_clear_flag(aperture->dev.of_node, OF_POPULATED);
 	device_del(&aperture->dev);
 	put_device(&aperture->dev);
@@ -362,10 +382,22 @@ struct aie_aperture *
 of_aie_aperture_probe(struct aie_device *adev, struct device_node *nc)
 {
 	struct aie_aperture *aperture, *laperture;
+	u32 regs[2], reg_len = 0, *regval;
+	struct resource *res;
 	struct device *dev;
 	struct aie_range *range;
-	u32 regs[2];
-	int ret;
+	int ret, i;
+
+	int num_elems = of_property_count_elems_of_size(nc, "reg",
+							sizeof(u32)) / 4;
+
+	regval = devm_kzalloc(&adev->dev, num_elems * 4 * sizeof(*regval), GFP_KERNEL);
+	if (!regval)
+		return ERR_PTR(-ENOMEM);
+
+	res = devm_kzalloc(&adev->dev, num_elems * sizeof(*res), GFP_KERNEL);
+	if (!res)
+		return ERR_PTR(-ENOMEM);
 
 	aperture = kzalloc(sizeof(*aperture), GFP_KERNEL);
 	if (!aperture)
@@ -451,11 +483,31 @@ of_aie_aperture_probe(struct aie_device *adev, struct device_node *nc)
 		goto put_aperture_dev;
 	}
 
-	ret = of_address_to_resource(nc, 0, &aperture->res);
+	ret = of_property_read_u32_array(nc, "reg", regval, num_elems * 4);
 	if (ret < 0) {
-		dev_err(dev, "failed to get address from device node.\n");
-		goto put_aperture_dev;
+		dev_err(dev, "Failed to get reg information\n");
+		goto aie_res_uninit;
 	}
+
+	for (i = 0; i < num_elems; i++) {
+		if (i != 0) {
+			if (regval[i * 4 + 1] != reg_len) {
+				dev_err(dev, "Memory regions are not contiguous\n");
+				ret = -EINVAL;
+				goto aie_res_uninit;
+			}
+		}
+
+		reg_len += regval[i * 4 + 3];
+		if (of_address_to_resource(nc, i, &res[i]) < 0) {
+			dev_err(dev, "failed to get address from device node\n");
+			ret = -EINVAL;
+			goto aie_res_uninit;
+		}
+	}
+
+	res[0].end = res[i - 1].end;
+	aperture->res = res[0];
 	aperture->base = devm_ioremap_resource(dev, &aperture->res);
 	if (!aperture->base) {
 		ret = -ENOMEM;
@@ -469,26 +521,54 @@ of_aie_aperture_probe(struct aie_device *adev, struct device_node *nc)
 	if (ret)
 		dev_warn(&aperture->dev, "Failed to configure DMA.\n");
 
-	/* Initialize interrupt */
-	ret = of_irq_get_byname(nc, "interrupt1");
+	/* Get device-name from device tree */
+	ret = of_property_read_u32_index(nc, "xlnx,device-name", 0,
+					 &aperture->adev->device_name);
 	if (ret < 0) {
-		dev_warn(dev, "no interrupt in device node.");
-	} else {
-		aperture->irq = ret;
+		aperture->adev->device_name = AIE_DEV_GENERIC_DEVICE;
+		dev_info(&adev->dev,
+			 "probe %pOF failed, no device-name", nc);
+	}
+
+	/* Initialize interrupt */
+	if (aperture->adev->device_name == AIE_DEV_GEN_S100 ||
+	    aperture->adev->device_name == AIE_DEV_GEN_S200) {
 		INIT_WORK(&aperture->backtrack, aie_aperture_backtrack);
-		ret = aie_aperture_create_l2_bitmap(aperture);
+		ret = aie_aperture_create_l2_mask(aperture);
 		if (ret) {
-			dev_err(dev,
-				"failed to initialize l2 mask resource.\n");
+			dev_err(dev, "failed to initialize l2 mask resource.\n");
 			goto put_aperture_dev;
 		}
 
-		ret = devm_request_threaded_irq(dev, aperture->irq, NULL,
-						aie_interrupt, IRQF_ONESHOT,
-						dev_name(dev), aperture);
+		ret = xlnx_register_event(PM_NOTIFY_CB, VERSAL_EVENT_ERROR_PMC_ERR1,
+					  XPM_VERSAL_EVENT_ERROR_MASK_AIE_CR,
+					  false, aie_interrupt_callback, aperture);
+
 		if (ret) {
-			dev_err(dev, "Failed to request AIE IRQ.\n");
+			dev_err(dev, "Interrupt forwarding failed.\n");
 			goto put_aperture_dev;
+		}
+	} else {
+		ret = of_irq_get_byname(nc, "interrupt1");
+		if (ret < 0) {
+			dev_warn(&adev->dev, "no interrupt in device node.");
+		} else {
+			aperture->irq = ret;
+			INIT_WORK(&aperture->backtrack, aie_aperture_backtrack);
+
+			ret = aie_aperture_create_l2_mask(aperture);
+			if (ret) {
+				dev_err(dev, "failed to initialize l2 mask resource.\n");
+				goto put_aperture_dev;
+			}
+
+			ret = devm_request_threaded_irq(dev, aperture->irq, NULL,
+							aie_interrupt, IRQF_ONESHOT,
+							dev_name(dev), aperture);
+			if (ret) {
+				dev_err(dev, "Failed to request AIE IRQ.\n");
+				goto put_aperture_dev;
+			}
 		}
 	}
 
@@ -500,7 +580,11 @@ of_aie_aperture_probe(struct aie_device *adev, struct device_node *nc)
 		goto put_aperture_dev;
 	}
 
-	of_node_get(nc);
+	ret = aie_aperture_sysfs_create_entries(aperture);
+	if (ret) {
+		dev_err(dev, "Failed to create aperture sysfs: %d\n", ret);
+		goto put_aperture_dev;
+	}
 
 	dev_info(dev,
 		 "AI engine aperture %s, id 0x%x, cols(%u, %u) aie_tile_rows(%u, %u) memory_tile_rows(%u, %u) is probed successfully.\n",
@@ -511,8 +595,12 @@ of_aie_aperture_probe(struct aie_device *adev, struct device_node *nc)
 		 adev->ttype_attr[AIE_TILE_TYPE_MEMORY].start_row,
 		 adev->ttype_attr[AIE_TILE_TYPE_MEMORY].num_rows);
 
+	devm_kfree(&adev->dev, res);
+	devm_kfree(&adev->dev, regval);
 	return aperture;
 
+aie_res_uninit:
+	aie_resource_uninitialize(&aperture->cols_res);
 put_aperture_dev:
 	put_device(dev);
 	return ERR_PTR(ret);

@@ -163,8 +163,7 @@ typedef struct elf32_fdesc {
 
 /* Format for the Elf64 Function descriptor */
 typedef struct elf64_fdesc {
-	__u64	dummy[2]; /* FIXME: nothing uses these, why waste
-			   * the space */
+	__u64	dummy[2]; /* used by 64-bit eBPF and tracing functions */
 	__u64	addr;
 	__u64	gp;
 } Elf64_Fdesc;
@@ -358,5 +357,20 @@ struct pt_regs;	/* forward declaration... */
 struct mm_struct;
 extern unsigned long arch_randomize_brk(struct mm_struct *);
 #define arch_randomize_brk arch_randomize_brk
+
+
+#define ARCH_HAS_SETUP_ADDITIONAL_PAGES 1
+struct linux_binprm;
+extern int arch_setup_additional_pages(struct linux_binprm *bprm,
+					int executable_stack);
+#define VDSO_AUX_ENT(a, b) NEW_AUX_ENT(a, b)
+#define VDSO_CURRENT_BASE current->mm->context.vdso_base
+
+#define ARCH_DLINFO						\
+do {								\
+	if (VDSO_CURRENT_BASE) {				\
+		NEW_AUX_ENT(AT_SYSINFO_EHDR, VDSO_CURRENT_BASE);\
+	}							\
+} while (0)
 
 #endif

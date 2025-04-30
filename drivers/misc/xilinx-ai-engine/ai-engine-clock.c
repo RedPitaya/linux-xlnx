@@ -22,8 +22,9 @@
 static int aie_part_get_clk_state_bit(struct aie_partition *apart,
 				      struct aie_location *loc)
 {
-	if (apart->adev->ops->get_tile_type(apart->adev, loc) !=
-			AIE_TILE_TYPE_TILE)
+	u32 ttype = apart->adev->ops->get_tile_type(apart->adev, loc);
+
+	if (ttype != AIE_TILE_TYPE_TILE && ttype != AIE_TILE_TYPE_MEMORY)
 		return -EINVAL;
 
 	return (loc->col - apart->range.start.col) *
@@ -54,9 +55,9 @@ bool aie_part_check_clk_enable_loc(struct aie_partition *apart,
 				   struct aie_location *loc)
 {
 	int bit;
+	u32 ttype = apart->adev->ops->get_tile_type(apart->adev, loc);
 
-	if (apart->adev->ops->get_tile_type(apart->adev, loc) !=
-			AIE_TILE_TYPE_TILE)
+	if (ttype != AIE_TILE_TYPE_TILE && ttype != AIE_TILE_TYPE_MEMORY)
 		return true;
 
 	bit = aie_part_get_clk_state_bit(apart, loc);
@@ -72,8 +73,8 @@ bool aie_part_check_clk_enable_loc(struct aie_partition *apart,
  *
  * This function will enable clocks of the specified tiles.
  */
-static int aie_part_request_tiles(struct aie_partition *apart, int num_tiles,
-				  struct aie_location *locs)
+int aie_part_request_tiles(struct aie_partition *apart, int num_tiles,
+			   struct aie_location *locs)
 {
 	if (num_tiles == 0) {
 		aie_resource_set(&apart->tiles_inuse, 0,
@@ -104,8 +105,8 @@ static int aie_part_request_tiles(struct aie_partition *apart, int num_tiles,
  *
  * This function will disable clocks of the specified tiles.
  */
-static int aie_part_release_tiles(struct aie_partition *apart, int num_tiles,
-				  struct aie_location *locs)
+int aie_part_release_tiles(struct aie_partition *apart, int num_tiles,
+			   struct aie_location *locs)
 {
 	if (num_tiles == 0) {
 		aie_resource_clear(&apart->tiles_inuse, 0,
@@ -246,6 +247,92 @@ int aie_part_release_tiles_from_user(struct aie_partition *apart,
 	mutex_unlock(&apart->mlock);
 
 	kfree(locs);
+	return ret;
+}
+
+/**
+ * aie_part_set_column_clock_from_user() - enable/disable column clock register
+ *                                        from an AI engine partition from
+ *                                        user
+ * @apart: AI engine partition
+ * @user_args: user AI engine request tiles argument
+ * @return: 0 for success, negative value for failure.
+ *
+ * This function will request tiles from user request.h
+ */
+int aie_part_set_column_clock_from_user(struct aie_partition *apart,
+					void __user *user_args)
+{
+	u32 part_end_col = apart->range.start.col + apart->range.size.col - 1;
+	u32 node_id = apart->adev->pm_node_id;
+	struct aie_column_args args;
+	struct aie_location locs;
+	int ret;
+	u32 c;
+
+	if (copy_from_user(&args, user_args, sizeof(args)))
+		return -EFAULT;
+
+	if ((args.start_col + args.num_cols - 1) > part_end_col) {
+		dev_err(&apart->dev, "invalid start column/size column\n");
+		return -EINVAL;
+	}
+
+	ret = mutex_lock_interruptible(&apart->mlock);
+
+	if (ret)
+		return ret;
+
+	if (args.enable) {
+		ret = zynqmp_pm_aie_operation(node_id, args.start_col,
+					      args.num_cols,
+					      XILINX_AIE_OPS_ENB_COL_CLK_BUFF);
+		if (ret < 0) {
+			dev_err(&apart->dev, "failed to enable clocks for partition\n");
+			goto exit;
+		}
+
+		for (c = (args.start_col + apart->range.start.col);
+				c < (args.start_col + args.num_cols); c++) {
+			int bit;
+
+			locs.col = c;
+			locs.row = 1;
+			bit = aie_part_get_clk_state_bit(apart, &locs);
+			if (bit >= 0) {
+				aie_resource_set(&apart->tiles_inuse, bit,
+						 apart->range.size.row - 1);
+				aie_resource_set(&apart->cores_clk_state, bit,
+						 apart->range.size.row - 1);
+			}
+		}
+	} else {
+		ret = zynqmp_pm_aie_operation(node_id, args.start_col,
+					      args.num_cols,
+					      XILINX_AIE_OPS_DIS_COL_CLK_BUFF);
+		if (ret < 0) {
+			dev_err(&apart->dev, "failed to disable clocks for partition\n");
+			goto exit;
+		}
+
+		for (c = (args.start_col + apart->range.start.col);
+				c < (args.start_col + args.num_cols); c++) {
+			int bit;
+
+			locs.col = c;
+			locs.row = 1;
+			bit = aie_part_get_clk_state_bit(apart, &locs);
+			if (bit >= 0) {
+				aie_resource_clear(&apart->tiles_inuse, bit,
+						   apart->range.size.row - 1);
+				aie_resource_clear(&apart->cores_clk_state, bit,
+						   apart->range.size.row - 1);
+			}
+		}
+	}
+
+exit:
+	mutex_unlock(&apart->mlock);
 	return ret;
 }
 

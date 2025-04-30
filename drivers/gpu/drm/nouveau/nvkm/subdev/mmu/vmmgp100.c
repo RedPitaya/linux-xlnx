@@ -453,15 +453,17 @@ gp100_vmm_valid(struct nvkm_vmm *vmm, void *argv, u32 argc,
 			return -EINVAL;
 		}
 
-		ret = nvkm_memory_tags_get(memory, device, tags,
-					   nvkm_ltc_tags_clear,
-					   &map->tags);
-		if (ret) {
-			VMM_DEBUG(vmm, "comp %d", ret);
-			return ret;
+		if (!map->no_comp) {
+			ret = nvkm_memory_tags_get(memory, device, tags,
+						   nvkm_ltc_tags_clear,
+						   &map->tags);
+			if (ret) {
+				VMM_DEBUG(vmm, "comp %d", ret);
+				return ret;
+			}
 		}
 
-		if (map->tags->mn) {
+		if (!map->no_comp && map->tags->mn) {
 			tags = map->tags->mn->offset + (map->offset >> 16);
 			map->ctag |= ((1ULL << page->shift) >> 16) << 36;
 			map->type |= tags << 36;
@@ -488,7 +490,7 @@ gp100_vmm_fault_cancel(struct nvkm_vmm *vmm, void *argv, u32 argc)
 		struct gp100_vmm_fault_cancel_v0 v0;
 	} *args = argv;
 	int ret = -ENOSYS;
-	u32 inst, aper;
+	u32 aper;
 
 	if ((ret = nvif_unpack(ret, &argv, &argc, args->v0, 0, 0, false)))
 		return ret;
@@ -502,7 +504,7 @@ gp100_vmm_fault_cancel(struct nvkm_vmm *vmm, void *argv, u32 argc)
 	args->v0.inst |= 0x80000000;
 
 	if (!WARN_ON(nvkm_gr_ctxsw_pause(device))) {
-		if ((inst = nvkm_gr_ctxsw_inst(device)) == args->v0.inst) {
+		if (nvkm_gr_ctxsw_inst(device) == args->v0.inst) {
 			gf100_vmm_invalidate(vmm, 0x0000001b
 					     /* CANCEL_TARGETED. */ |
 					     (args->v0.hub    << 20) |

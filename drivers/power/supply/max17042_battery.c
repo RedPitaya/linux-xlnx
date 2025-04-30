@@ -9,6 +9,7 @@
 // This driver is based on max17040_battery.c
 
 #include <linux/acpi.h>
+#include <linux/devm-helpers.h>
 #include <linux/init.h>
 #include <linux/module.h>
 #include <linux/slab.h>
@@ -313,7 +314,10 @@ static int max17042_get_property(struct power_supply *psy,
 		val->intval = data * 625 / 8;
 		break;
 	case POWER_SUPPLY_PROP_CAPACITY:
-		ret = regmap_read(map, MAX17042_RepSOC, &data);
+		if (chip->pdata->enable_current_sense)
+			ret = regmap_read(map, MAX17042_RepSOC, &data);
+		else
+			ret = regmap_read(map, MAX17042_VFSOC, &data);
 		if (ret < 0)
 			return ret;
 
@@ -493,11 +497,6 @@ static int max17042_property_is_writeable(struct power_supply *psy,
 	}
 
 	return ret;
-}
-
-static void max17042_external_power_changed(struct power_supply *psy)
-{
-	power_supply_changed(psy);
 }
 
 static int max17042_write_verify_reg(struct regmap *map, u8 reg, u32 value)
@@ -783,7 +782,7 @@ static inline void max17042_override_por_values(struct max17042_chip *chip)
 	if ((chip->chip_type == MAXIM_DEVICE_TYPE_MAX17042) ||
 	    (chip->chip_type == MAXIM_DEVICE_TYPE_MAX17047) ||
 	    (chip->chip_type == MAXIM_DEVICE_TYPE_MAX17050)) {
-		max17042_override_por(map, MAX17042_LAvg_empty, config->lavg_empty);
+		max17042_override_por(map, MAX17042_IAvg_empty, config->iavg_empty);
 		max17042_override_por(map, MAX17042_TempNom, config->temp_nom);
 		max17042_override_por(map, MAX17042_TempLim, config->temp_lim);
 		max17042_override_por(map, MAX17042_FCTC, config->fctc);
@@ -857,7 +856,8 @@ static void max17042_set_soc_threshold(struct max17042_chip *chip, u16 off)
 	regmap_read(map, MAX17042_RepSOC, &soc);
 	soc >>= 8;
 	soc_tr = (soc + off) << 8;
-	soc_tr |= (soc - off);
+	if (off < soc)
+		soc_tr |= soc - off;
 	regmap_write(map, MAX17042_SALRT_Th, soc_tr);
 }
 
@@ -875,6 +875,10 @@ static irqreturn_t max17042_thread_handler(int id, void *dev)
 		dev_dbg(&chip->client->dev, "SOC threshold INTR\n");
 		max17042_set_soc_threshold(chip, 1);
 	}
+
+	/* we implicitly handle all alerts via power_supply_changed */
+	regmap_clear_bits(chip->regmap, MAX17042_STATUS,
+			  0xFFFF & ~(STATUS_POR_BIT | STATUS_BST_BIT));
 
 	power_supply_changed(chip->battery);
 	return IRQ_HANDLED;
@@ -1007,7 +1011,7 @@ static const struct power_supply_desc max17042_psy_desc = {
 	.get_property	= max17042_get_property,
 	.set_property	= max17042_set_property,
 	.property_is_writeable	= max17042_property_is_writeable,
-	.external_power_changed	= max17042_external_power_changed,
+	.external_power_changed	= power_supply_changed,
 	.properties	= max17042_battery_props,
 	.num_properties	= ARRAY_SIZE(max17042_battery_props),
 };
@@ -1022,16 +1026,9 @@ static const struct power_supply_desc max17042_no_current_sense_psy_desc = {
 	.num_properties	= ARRAY_SIZE(max17042_battery_props) - 2,
 };
 
-static void max17042_stop_work(void *data)
+static int max17042_probe(struct i2c_client *client)
 {
-	struct max17042_chip *chip = data;
-
-	cancel_work_sync(&chip->work);
-}
-
-static int max17042_probe(struct i2c_client *client,
-			const struct i2c_device_id *id)
-{
+	const struct i2c_device_id *id = i2c_client_get_device_id(client);
 	struct i2c_adapter *adapter = client->adapter;
 	const struct power_supply_desc *max17042_desc = &max17042_psy_desc;
 	struct power_supply_config psy_cfg = {};
@@ -1134,8 +1131,8 @@ static int max17042_probe(struct i2c_client *client,
 
 	regmap_read(chip->regmap, MAX17042_STATUS, &val);
 	if (val & STATUS_POR_BIT) {
-		INIT_WORK(&chip->work, max17042_init_worker);
-		ret = devm_add_action(&client->dev, max17042_stop_work, chip);
+		ret = devm_work_autocancel(&client->dev, &chip->work,
+					   max17042_init_worker);
 		if (ret)
 			return ret;
 		schedule_work(&chip->work);

@@ -97,6 +97,30 @@ do {								\
 			     __func__, __LINE__, current->pid,	\
 			     ##__VA_ARGS__)
 
+static inline void mlx5_printk(struct mlx5_core_dev *dev, int level, const char *format, ...)
+{
+	struct device *device = dev->device;
+	struct va_format vaf;
+	va_list args;
+
+	if (WARN_ONCE(level < LOGLEVEL_EMERG || level > LOGLEVEL_DEBUG,
+		      "Level %d is out of range, set to default level\n", level))
+		level = LOGLEVEL_DEFAULT;
+
+	va_start(args, format);
+	vaf.fmt = format;
+	vaf.va = &args;
+
+	dev_printk_emit(level, device, "%s %s: %pV", dev_driver_string(device), dev_name(device),
+			&vaf);
+	va_end(args);
+}
+
+#define mlx5_log(__dev, level, format, ...)			\
+	mlx5_printk(__dev, level, "%s:%d:(pid %d): " format,	\
+		    __func__, __LINE__, current->pid,		\
+		    ##__VA_ARGS__)
+
 static inline struct device *mlx5_core_dma_dev(struct mlx5_core_dev *dev)
 {
 	return &dev->pdev->dev;
@@ -118,11 +142,48 @@ enum mlx5_semaphore_space_address {
 };
 
 #define MLX5_DEFAULT_PROF       2
+#define MLX5_SF_PROF		3
 
+static inline int mlx5_flexible_inlen(struct mlx5_core_dev *dev, size_t fixed,
+				      size_t item_size, size_t num_items,
+				      const char *func, int line)
+{
+	int inlen;
+
+	if (fixed > INT_MAX || item_size > INT_MAX || num_items > INT_MAX) {
+		mlx5_core_err(dev, "%s: %s:%d: input values too big: %zu + %zu * %zu\n",
+			      __func__, func, line, fixed, item_size, num_items);
+		return -ENOMEM;
+	}
+
+	if (check_mul_overflow((int)item_size, (int)num_items, &inlen)) {
+		mlx5_core_err(dev, "%s: %s:%d: multiplication overflow: %zu + %zu * %zu\n",
+			      __func__, func, line, fixed, item_size, num_items);
+		return -ENOMEM;
+	}
+
+	if (check_add_overflow((int)fixed, inlen, &inlen)) {
+		mlx5_core_err(dev, "%s: %s:%d: addition overflow: %zu + %zu * %zu\n",
+			      __func__, func, line, fixed, item_size, num_items);
+		return -ENOMEM;
+	}
+
+	return inlen;
+}
+
+#define MLX5_FLEXIBLE_INLEN(dev, fixed, item_size, num_items) \
+	mlx5_flexible_inlen(dev, fixed, item_size, num_items, __func__, __LINE__)
+
+int mlx5_core_get_caps(struct mlx5_core_dev *dev, enum mlx5_cap_type cap_type);
+int mlx5_core_get_caps_mode(struct mlx5_core_dev *dev, enum mlx5_cap_type cap_type,
+			    enum mlx5_cap_mode cap_mode);
 int mlx5_query_hca_caps(struct mlx5_core_dev *dev);
 int mlx5_query_board_id(struct mlx5_core_dev *dev);
+int mlx5_query_module_num(struct mlx5_core_dev *dev, int *module_num);
 int mlx5_cmd_init(struct mlx5_core_dev *dev);
 void mlx5_cmd_cleanup(struct mlx5_core_dev *dev);
+int mlx5_cmd_enable(struct mlx5_core_dev *dev);
+void mlx5_cmd_disable(struct mlx5_core_dev *dev);
 void mlx5_cmd_set_state(struct mlx5_core_dev *dev,
 			enum mlx5_cmdif_state cmdif_state);
 int mlx5_cmd_init_hca(struct mlx5_core_dev *dev, uint32_t *sw_owner_id);
@@ -140,6 +201,7 @@ void mlx5_sriov_cleanup(struct mlx5_core_dev *dev);
 int mlx5_sriov_attach(struct mlx5_core_dev *dev);
 void mlx5_sriov_detach(struct mlx5_core_dev *dev);
 int mlx5_core_sriov_configure(struct pci_dev *dev, int num_vfs);
+void mlx5_sriov_disable(struct pci_dev *pdev, bool num_vf_change);
 int mlx5_core_sriov_set_msix_vec_count(struct pci_dev *vf, int msix_vec_count);
 int mlx5_core_enable_hca(struct mlx5_core_dev *dev, u16 func_id);
 int mlx5_core_disable_hca(struct mlx5_core_dev *dev, u16 func_id);
@@ -152,7 +214,6 @@ int mlx5_destroy_scheduling_element_cmd(struct mlx5_core_dev *dev, u8 hierarchy,
 					u32 element_id);
 int mlx5_wait_for_pages(struct mlx5_core_dev *dev, int *pages);
 
-void mlx5_cmd_trigger_completions(struct mlx5_core_dev *dev);
 void mlx5_cmd_flush(struct mlx5_core_dev *dev);
 void mlx5_cq_debugfs_init(struct mlx5_core_dev *dev);
 void mlx5_cq_debugfs_cleanup(struct mlx5_core_dev *dev);
@@ -182,14 +243,17 @@ void mlx5_adev_cleanup(struct mlx5_core_dev *dev);
 int mlx5_adev_init(struct mlx5_core_dev *dev);
 
 int mlx5_attach_device(struct mlx5_core_dev *dev);
-void mlx5_detach_device(struct mlx5_core_dev *dev);
+void mlx5_detach_device(struct mlx5_core_dev *dev, bool suspend);
 int mlx5_register_device(struct mlx5_core_dev *dev);
 void mlx5_unregister_device(struct mlx5_core_dev *dev);
-struct mlx5_core_dev *mlx5_get_next_phys_dev(struct mlx5_core_dev *dev);
+void mlx5_dev_set_lightweight(struct mlx5_core_dev *dev);
+bool mlx5_dev_is_lightweight(struct mlx5_core_dev *dev);
+struct mlx5_core_dev *mlx5_get_next_phys_dev_lag(struct mlx5_core_dev *dev);
 void mlx5_dev_list_lock(void);
 void mlx5_dev_list_unlock(void);
 int mlx5_dev_list_trylock(void);
 
+void mlx5_fw_reporters_create(struct mlx5_core_dev *dev);
 int mlx5_query_mtpps(struct mlx5_core_dev *dev, u32 *mtpps, u32 mtpps_size);
 int mlx5_set_mtpps(struct mlx5_core_dev *mdev, u32 *mtpps, u32 mtpps_size);
 int mlx5_query_mtppse(struct mlx5_core_dev *mdev, u8 pin, u8 *arm, u8 *mode);
@@ -219,18 +283,6 @@ static inline void mlx5e_cleanup(void){}
 static inline bool mlx5_sriov_is_enabled(struct mlx5_core_dev *dev)
 {
 	return pci_num_vf(dev->pdev) ? true : false;
-}
-
-static inline int mlx5_lag_is_lacp_owner(struct mlx5_core_dev *dev)
-{
-	/* LACP owner conditions:
-	 * 1) Function is physical.
-	 * 2) LAG is supported by FW.
-	 * 3) LAG is managed by driver (currently the only option).
-	 */
-	return  MLX5_CAP_GEN(dev, vport_group_manager) &&
-		   (MLX5_CAP_GEN(dev, num_lag_ports) > 1) &&
-		    MLX5_CAP_GEN(dev, lag_master);
 }
 
 int mlx5_rescan_drivers_locked(struct mlx5_core_dev *dev);
@@ -264,11 +316,20 @@ static inline bool mlx5_core_is_sf(const struct mlx5_core_dev *dev)
 int mlx5_mdev_init(struct mlx5_core_dev *dev, int profile_idx);
 void mlx5_mdev_uninit(struct mlx5_core_dev *dev);
 int mlx5_init_one(struct mlx5_core_dev *dev);
+int mlx5_init_one_devl_locked(struct mlx5_core_dev *dev);
 void mlx5_uninit_one(struct mlx5_core_dev *dev);
-void mlx5_unload_one(struct mlx5_core_dev *dev);
-int mlx5_load_one(struct mlx5_core_dev *dev);
+void mlx5_unload_one(struct mlx5_core_dev *dev, bool suspend);
+void mlx5_unload_one_devl_locked(struct mlx5_core_dev *dev, bool suspend);
+int mlx5_load_one(struct mlx5_core_dev *dev, bool recovery);
+int mlx5_load_one_devl_locked(struct mlx5_core_dev *dev, bool recovery);
+int mlx5_init_one_light(struct mlx5_core_dev *dev);
+void mlx5_uninit_one_light(struct mlx5_core_dev *dev);
+void mlx5_unload_one_light(struct mlx5_core_dev *dev);
 
-int mlx5_vport_get_other_func_cap(struct mlx5_core_dev *dev, u16 function_id, void *out);
+int mlx5_vport_set_other_func_cap(struct mlx5_core_dev *dev, const void *hca_cap, u16 vport,
+				  u16 opmod);
+#define mlx5_vport_get_other_func_general_cap(dev, vport, out)		\
+	mlx5_vport_get_other_func_cap(dev, vport, out, MLX5_CAP_GENERAL)
 
 void mlx5_events_work_enqueue(struct mlx5_core_dev *dev, struct work_struct *work);
 static inline u32 mlx5_sriov_get_vf_total_msix(struct pci_dev *pdev)
@@ -281,5 +342,33 @@ static inline u32 mlx5_sriov_get_vf_total_msix(struct pci_dev *pdev)
 bool mlx5_eth_supported(struct mlx5_core_dev *dev);
 bool mlx5_rdma_supported(struct mlx5_core_dev *dev);
 bool mlx5_vnet_supported(struct mlx5_core_dev *dev);
+bool mlx5_same_hw_devs(struct mlx5_core_dev *dev, struct mlx5_core_dev *peer_dev);
+
+static inline u16 mlx5_core_ec_vf_vport_base(const struct mlx5_core_dev *dev)
+{
+	return MLX5_CAP_GEN_2(dev, ec_vf_vport_base);
+}
+
+static inline u16 mlx5_core_ec_sriov_enabled(const struct mlx5_core_dev *dev)
+{
+	return mlx5_core_is_ecpf(dev) && mlx5_core_ec_vf_vport_base(dev);
+}
+
+static inline bool mlx5_core_is_ec_vf_vport(const struct mlx5_core_dev *dev, u16 vport_num)
+{
+	int base_vport = mlx5_core_ec_vf_vport_base(dev);
+	int max_vport = base_vport + mlx5_core_max_ec_vfs(dev);
+
+	if (!mlx5_core_ec_sriov_enabled(dev))
+		return false;
+
+	return (vport_num >= base_vport && vport_num < max_vport);
+}
+
+static inline int mlx5_vport_to_func_id(const struct mlx5_core_dev *dev, u16 vport, bool ec_vf_func)
+{
+	return ec_vf_func ? vport - mlx5_core_ec_vf_vport_base(dev) + 1
+			  : vport;
+}
 
 #endif /* __MLX5_CORE_H__ */

@@ -21,16 +21,6 @@ void xhdmiphy_intr_dis(struct xhdmiphy_dev *inst, u32 intr)
 	xhdmiphy_write(inst, XHDMIPHY_INTR_DIS_REG, reg_val);
 }
 
-static void xhdmiphy_set(struct xhdmiphy_dev *inst, u32 addr, u32 set)
-{
-	xhdmiphy_write(inst, addr, xhdmiphy_read(inst, addr) | set);
-}
-
-inline void xhdmiphy_clr(struct xhdmiphy_dev *inst, u32 addr, u32 clr)
-{
-	xhdmiphy_write(inst, addr, xhdmiphy_read(inst, addr) & ~clr);
-}
-
 /**
  * xhdmiphy_outdiv_reconf - This function will set the current output divider
  * configuration over DRP.
@@ -259,7 +249,8 @@ static u64 xhdmiphy_dru_cal_centerfreq(struct xhdmiphy_dev *inst,
 	clkdet_refclk = xhdmiphy_read(inst, XHDMIPHY_CLKDET_FREQ_RX_REG);
 	pll_prm = &inst->quad.plls[XHDMIPHY_CH2IDX(chid)].pll_param;
 
-	if (inst->conf.gt_type != XHDMIPHY_GTYE5) {
+	if (inst->conf.gt_type != XHDMIPHY_GTYE5 &&
+	    inst->conf.gt_type != XHDMIPHY_GTYP) {
 		dru_refclk = xhdmiphy_get_dru_refclk(inst);
 		/* take the master channel (channel 1) */
 		ch_ptr = &inst->quad.ch1;
@@ -491,6 +482,9 @@ u32 xhdmiphy_init_phy(struct xhdmiphy_dev *inst)
 {
 	u8 id, id0, id1;
 
+	if (inst->phy_ready)
+		return 0;
+
 	xhdmiphy_cfg_init(inst);
 
 	xhdmiphy_ch2ids(inst, XHDMIPHY_CHID_CHA, &id0, &id1);
@@ -519,7 +513,8 @@ u32 xhdmiphy_init_phy(struct xhdmiphy_dev *inst)
 		       inst->conf.axilite_freq);
 	xhdmiphy_clkdet_freq_threshold(inst, 40);
 
-	if (inst->conf.gt_type != XHDMIPHY_GTYE5) {
+	if (inst->conf.gt_type != XHDMIPHY_GTYE5 &&
+	    inst->conf.gt_type != XHDMIPHY_GTYP) {
 		xhdmiphy_set_sys_clksel(inst);
 
 		/* indicate of QPLL is present in design */
@@ -563,13 +558,15 @@ u32 xhdmiphy_init_phy(struct xhdmiphy_dev *inst)
 		xhdmiphy_dru_en(inst, XHDMIPHY_CHID_CHA, false);
 	}
 
-	if (inst->conf.gt_type != XHDMIPHY_GTYE5)
+	if (inst->conf.gt_type != XHDMIPHY_GTYE5 &&
+	    inst->conf.gt_type != XHDMIPHY_GTYP)
 		xhdmiphy_set_rxlpm(inst, XHDMIPHY_CHID_CHA,
 				   XHDMIPHY_DIR_RX, 0);
 
 	xhdmiphy_ch2ids(inst, XHDMIPHY_CHID_CHA, &id0, &id1);
 	for (id = id0; id <= id1; id++) {
-		if (inst->conf.gt_type != XHDMIPHY_GTYE5)
+		if (inst->conf.gt_type != XHDMIPHY_GTYE5 &&
+		    inst->conf.gt_type != XHDMIPHY_GTYP)
 			xhdmiphy_set_tx_vs(inst, (enum chid)id,
 					   XHDMIPHY_HDMI_GTHE4_DEFAULT_VS_VAL);
 		else
@@ -589,7 +586,8 @@ u32 xhdmiphy_init_phy(struct xhdmiphy_dev *inst)
 	xhdmiphy_intr_en(inst, XHDMIPHY_INTR_TXRESETDONE_MASK |
 			 XHDMIPHY_INTR_RXRESETDONE_MASK);
 
-	if (inst->conf.gt_type != XHDMIPHY_GTYE5) {
+	if (inst->conf.gt_type != XHDMIPHY_GTYE5 &&
+	    inst->conf.gt_type != XHDMIPHY_GTYP) {
 		xhdmiphy_intr_en(inst, XHDMIPHY_INTR_CPLL_LOCK_MASK |
 				 XHDMIPHY_INTR_QPLL_LOCK_MASK |
 				 XHDMIPHY_INTR_TXALIGNDONE_MASK |
@@ -610,6 +608,17 @@ u32 xhdmiphy_init_phy(struct xhdmiphy_dev *inst)
 
 	xhdmiphy_set(inst, XHDMIPHY_CLKDET_CTRL_REG,
 		     XHDMIPHY_CLKDET_CTRL_RUN_MASK);
+
+	if (inst->conf.gt_type == XHDMIPHY_GTYE5 ||
+	    inst->conf.gt_type == XHDMIPHY_GTYP) {
+		for (id = id0; id <= id1; id++) {
+			xhdmiphy_set_tx_vs(inst, (enum chid)id, 0xD);
+			xhdmiphy_set_tx_pe(inst, (enum chid)id, 0x5);
+			xhdmiphy_set_tx_pc(inst, (enum chid)id, 0x5);
+		}
+	}
+	inst->phy_ready = true;
+	dev_dbg(inst->dev, "HDMI PHY is initialized and ready\n");
 
 	return 0;
 }
@@ -790,7 +799,7 @@ static u32 xhdmiphy_lcpll_param(struct xhdmiphy_dev *inst, enum chid chid,
 			if ((XHDMIPHY_HDMI14_REFCLK_RANGE1 <= (*refclk_ptr)) &&
 			    ((*refclk_ptr) <= XHDMIPHY_HDMI14_REFCLK_RANGE2)) {
 				inst->quad.lcpll.linerate_cfg = 1;
-			} else if ((XHDMIPHY_HDMI14_REFCLK_RANGE3 <= (*refclk_ptr)) &&
+			} else if ((XHDMIPHY_HDMI14_REFCLK_RANGE2 <= (*refclk_ptr)) &&
 						/* 297 MHz + 0.5% + 10 KHz error */
 						((*refclk_ptr) <=
 						 XHDMIPHY_HDMI14_REFCLK_RANGE3)) {
@@ -856,7 +865,7 @@ static u32 xhdmiphy_rpll_param(struct xhdmiphy_dev *inst, enum chid chid,
 	/* Pre-calculation */
 	if (dir == XHDMIPHY_DIR_RX) {
 		refclk_ptr = &inst->rx_refclk_hz;
-		is_hdmi21 = inst->tx_hdmi21_cfg.is_en;
+		is_hdmi21 = inst->rx_hdmi21_cfg.is_en;
 		tmdsclk_ratio = inst->rx_tmdsclock_ratio;
 
 		/* calculate line rate */
@@ -1044,7 +1053,8 @@ u32 xhdmiphy_set_tx_param(struct xhdmiphy_dev *inst, enum chid chid,
 {
 	u32 status;
 
-	if (inst->conf.gt_type != XHDMIPHY_GTYE5) {
+	if (inst->conf.gt_type != XHDMIPHY_GTYE5 &&
+	    inst->conf.gt_type != XHDMIPHY_GTYP) {
 		/*
 		 * only calculate the QPLL/CPLL parameters when the GT TX and
 		 * RX are not coupled
@@ -1109,7 +1119,8 @@ static u32 xhdmiphy_set_rx_param(struct xhdmiphy_dev *inst, enum chid chid)
 	enum chid ch_id = chid;
 	enum pll_type pll_type;
 
-	if (inst->conf.gt_type != XHDMIPHY_GTYE5) {
+	if (inst->conf.gt_type != XHDMIPHY_GTYE5 &&
+	    inst->conf.gt_type != XHDMIPHY_GTYP) {
 		if (xhdmiphy_is_rx_using_cpll(inst, chid)) {
 			status = xhdmiphy_cpll_param(inst, chid,
 						     XHDMIPHY_DIR_RX);
@@ -1142,7 +1153,8 @@ static void xhdmiphy_tx_timertimeout_handler(struct xhdmiphy_dev *inst)
 	enum pll_type pll_type;
 	u8 val_cmp, id, id0, id1;
 
-	if (inst->conf.gt_type != XHDMIPHY_GTYE5) {
+	if (inst->conf.gt_type != XHDMIPHY_GTYE5 &&
+	    inst->conf.gt_type != XHDMIPHY_GTYP) {
 		pll_type = xhdmiphy_get_pll_type(inst, XHDMIPHY_DIR_TX,
 						 XHDMIPHY_CHID_CH1);
 		/* determine which channel(s) to operate on */
@@ -1271,7 +1283,8 @@ static void xhdmiphy_rx_timertimeout_handler(struct xhdmiphy_dev *inst)
 
 	xhdmiphy_dru_mode_en(inst, inst->rx_dru_enabled);
 
-	if (inst->conf.gt_type != XHDMIPHY_GTYE5) {
+	if (inst->conf.gt_type != XHDMIPHY_GTYE5 &&
+	    inst->conf.gt_type != XHDMIPHY_GTYP) {
 		/* enable PLL */
 		xhdmiphy_powerdown_gtpll(inst, (pll_type == XHDMIPHY_PLL_CPLL) ?
 					 XHDMIPHY_CHID_CHA :
@@ -1350,7 +1363,8 @@ void xhdmiphy_hdmi20_conf(struct xhdmiphy_dev *inst, enum dir dir)
 	else
 		xhdmiphy_intr_en(inst, XHDMIPHY_INTR_RXFREQCHANGE_MASK);
 
-	if (inst->conf.gt_type != XHDMIPHY_GTYE5) {
+	if (inst->conf.gt_type != XHDMIPHY_GTYE5 &&
+	    inst->conf.gt_type != XHDMIPHY_GTYP) {
 		xhdmiphy_pll_refclk_sel(inst, ((pll_type == XHDMIPHY_PLL_CPLL) ?
 					XHDMIPHY_CHID_CHA : XHDMIPHY_CHID_CMNA),
 					((dir == XHDMIPHY_DIR_TX) ?
@@ -1406,7 +1420,8 @@ u32 xhdmiphy_hdmi21_conf(struct xhdmiphy_dev *inst, enum dir dir, u64 linerate,
 			xhdmiphy_intr_dis(inst, XHDMIPHY_INTR_RXFREQCHANGE_MASK);
 	}
 
-	if (inst->conf.gt_type != XHDMIPHY_GTYE5) {
+	if (inst->conf.gt_type != XHDMIPHY_GTYE5 &&
+	    inst->conf.gt_type != XHDMIPHY_GTYP) {
 		xhdmiphy_pll_refclk_sel(inst, ((pll_type == XHDMIPHY_PLL_CPLL) ?
 					XHDMIPHY_CHID_CHA : XHDMIPHY_CHID_CMNA),
 					((dir == XHDMIPHY_DIR_TX) ?
@@ -1483,12 +1498,14 @@ static bool xhdmiphy_is_pll_locked(struct xhdmiphy_dev *inst, enum chid chid)
 	enum pll_type tx_pll, rx_pll;
 
 	if (chid == XHDMIPHY_CHID_CMN0) {
-		if (inst->conf.gt_type != XHDMIPHY_GTYE5)
+		if (inst->conf.gt_type != XHDMIPHY_GTYE5 &&
+		    inst->conf.gt_type != XHDMIPHY_GTYP)
 			mask_val = XHDMIPHY_PLL_LOCK_STATUS_QPLL0_MASK;
 		else
 			mask_val = XHDMIPHY_PLL_LOCK_STATUS_LCPLL_MASK;
 	} else if ((chid == XHDMIPHY_CHID_CMN1) &&
-		   (inst->conf.gt_type != XHDMIPHY_GTYE5)) {
+		   (inst->conf.gt_type != XHDMIPHY_GTYE5) &&
+		   inst->conf.gt_type != XHDMIPHY_GTYP) {
 		mask_val = XHDMIPHY_PLL_LOCK_STATUS_QPLL1_MASK;
 	} else if (chid == XHDMIPHY_CHID_CMN1) {
 		mask_val = XHDMIPHY_PLL_LOCK_STATUS_RPLL_MASK;
@@ -1497,7 +1514,8 @@ static bool xhdmiphy_is_pll_locked(struct xhdmiphy_dev *inst, enum chid chid)
 		mask_val = XHDMIPHY_PLL_LOCK_STATUS_CPLL_ALL_MASK;
 	}
 
-	if (inst->conf.gt_type != XHDMIPHY_GTYE5) {
+	if (inst->conf.gt_type != XHDMIPHY_GTYE5 &&
+	    inst->conf.gt_type != XHDMIPHY_GTYP) {
 		if (chid == XHDMIPHY_CHID_CMNA) {
 			mask_val = XHDMIPHY_PLL_LOCK_STATUS_QPLL0_MASK |
 				   XHDMIPHY_PLL_LOCK_STATUS_QPLL1_MASK;
@@ -1540,7 +1558,7 @@ static void xhdmiphy_lcpll_lock_handler(struct xhdmiphy_dev *inst)
 	/* Determine which channel(s) to operate on */
 	chid = xhdmiphy_get_rcfg_chid(XHDMIPHY_PLL_LCPLL);
 	if (xhdmiphy_is_pll_locked(inst, chid) == 0) {
-		dev_info(inst->dev, "lcpll is locked\n");
+		dev_dbg(inst->dev, "lcpll is locked\n");
 		xhdmiphy_ch2ids(inst, XHDMIPHY_CHID_CHA, &id0, &id1);
 		for (id = id0; id <= id1; id++) {
 			if (tx_pll_type == XHDMIPHY_PLL_LCPLL)
@@ -1551,7 +1569,7 @@ static void xhdmiphy_lcpll_lock_handler(struct xhdmiphy_dev *inst)
 							XHDMIPHY_GT_STATE_RESET;
 		}
 	} else {
-		dev_info(inst->dev, "lcpll lock lost !\n");
+		dev_dbg(inst->dev, "lcpll lock lost !\n");
 	}
 }
 
@@ -1566,7 +1584,7 @@ static void xhdmiphy_rpll_lock_handler(struct xhdmiphy_dev *inst)
 	/* determine which channel(s) to operate on */
 	chid = xhdmiphy_get_rcfg_chid(XHDMIPHY_PLL_RPLL);
 	if (xhdmiphy_is_pll_locked(inst, chid) == 0) {
-		dev_info(inst->dev, "rpll is locked\n");
+		dev_dbg(inst->dev, "rpll is locked\n");
 		xhdmiphy_ch2ids(inst, XHDMIPHY_CHID_CHA, &id0, &id1);
 		for (id = id0; id <= id1; id++) {
 			if (tx_pll_type == XHDMIPHY_PLL_RPLL) {
@@ -1578,7 +1596,7 @@ static void xhdmiphy_rpll_lock_handler(struct xhdmiphy_dev *inst)
 			}
 		}
 	} else {
-		dev_info(inst->dev, "rpll lock lost !\n");
+		dev_dbg(inst->dev, "rpll lock lost !\n");
 	}
 }
 
@@ -1634,7 +1652,7 @@ static void xhdmiphy_qpll_lock_handler(struct xhdmiphy_dev *inst)
 		chid = xhdmiphy_get_rcfg_chid(rx_pll_type);
 
 		if (xhdmiphy_is_pll_locked(inst, chid) == 0) {
-			dev_info(inst->dev, "qpll is locked\n");
+			dev_dbg(inst->dev, "qpll is locked\n");
 			xhdmiphy_rst_gt_txrx(inst, XHDMIPHY_CHID_CHA,
 					     XHDMIPHY_DIR_RX, false);
 			xhdmiphy_ch2ids(inst, XHDMIPHY_CHID_CHA, &id0, &id1);
@@ -1643,13 +1661,13 @@ static void xhdmiphy_qpll_lock_handler(struct xhdmiphy_dev *inst)
 							XHDMIPHY_GT_STATE_RESET;
 
 		} else {
-			dev_info(inst->dev, "qpll lock lost!\n");
+			dev_dbg(inst->dev, "qpll lock lost!\n");
 		}
 	} else {
 		/* tX is using QPLL */
 		chid = xhdmiphy_get_rcfg_chid(tx_pll_type);
 		if (xhdmiphy_is_pll_locked(inst, chid) == 0) {
-			dev_info(inst->dev, "qpll locked\n");
+			dev_dbg(inst->dev, "qpll locked\n");
 			xhdmiphy_rst_gt_txrx(inst, XHDMIPHY_CHID_CHA,
 					     XHDMIPHY_DIR_TX, false);
 			xhdmiphy_ch2ids(inst, XHDMIPHY_CHID_CHA, &id0,
@@ -1659,7 +1677,7 @@ static void xhdmiphy_qpll_lock_handler(struct xhdmiphy_dev *inst)
 							XHDMIPHY_GT_STATE_RESET;
 			}
 		} else {
-			dev_info(inst->dev, "qpll lock lost !\n");
+			dev_dbg(inst->dev, "qpll lock lost !\n");
 		}
 	}
 }
@@ -1680,7 +1698,7 @@ static void xhdmiphy_cpll_lock_handler(struct xhdmiphy_dev *inst)
 	if (rx_pll_type == XHDMIPHY_PLL_CPLL) {
 		chid = xhdmiphy_get_rcfg_chid(rx_pll_type);
 		if (xhdmiphy_is_pll_locked(inst, chid) == 0) {
-			dev_info(inst->dev, "cpll locked\n");
+			dev_dbg(inst->dev, "cpll locked\n");
 			xhdmiphy_rst_gt_txrx(inst, XHDMIPHY_CHID_CHA,
 					     XHDMIPHY_DIR_RX, false);
 			for (id = id0; id <= id1; id++) {
@@ -1688,7 +1706,7 @@ static void xhdmiphy_cpll_lock_handler(struct xhdmiphy_dev *inst)
 							XHDMIPHY_GT_STATE_RESET;
 			}
 		} else {
-			dev_info(inst->dev, "cpll lock lost\n");
+			dev_dbg(inst->dev, "cpll lock lost\n");
 		}
 	} else {
 		/*
@@ -1697,7 +1715,7 @@ static void xhdmiphy_cpll_lock_handler(struct xhdmiphy_dev *inst)
 		 */
 		chid = xhdmiphy_get_rcfg_chid(tx_pll_type);
 		if (xhdmiphy_is_pll_locked(inst, chid) == 0) {
-			dev_info(inst->dev, "cpll locked\n");
+			dev_dbg(inst->dev, "cpll locked\n");
 			xhdmiphy_rst_gt_txrx(inst, XHDMIPHY_CHID_CHA,
 					     XHDMIPHY_DIR_TX, false);
 			for (id = id0; id <= id1; id++) {
@@ -1705,7 +1723,7 @@ static void xhdmiphy_cpll_lock_handler(struct xhdmiphy_dev *inst)
 							XHDMIPHY_GT_STATE_RESET;
 			}
 		} else {
-			dev_info(inst->dev, "cpll lock lost\n");
+			dev_dbg(inst->dev, "cpll lock lost\n");
 		}
 	}
 }
@@ -1745,7 +1763,8 @@ static void xhdmiphy_txgt_rstdone_handler(struct xhdmiphy_dev *inst)
 			     XHDMIPHY_PATGEN_CTRL_ENABLE_MASK);
 	}
 
-	if (inst->conf.gt_type != XHDMIPHY_GTYE5) {
+	if (inst->conf.gt_type != XHDMIPHY_GTYE5 &&
+	    inst->conf.gt_type != XHDMIPHY_GTYP) {
 		if (inst->conf.gt_type == XHDMIPHY_GTTYPE_GTHE4 ||
 		    inst->conf.gt_type == XHDMIPHY_GTTYPE_GTYE4) {
 			xhdmiphy_tx_align_rst(inst, XHDMIPHY_CHID_CHA, true);
@@ -1813,7 +1832,8 @@ static void xhdmiphy_tx_freqchnage_handler(struct xhdmiphy_dev *inst)
 					 XHDMIPHY_CHID_CH1);
 
 	/* If the TX frequency has changed, the PLL is always disabled */
-	if (inst->conf.gt_type != XHDMIPHY_GTYE5) {
+	if (inst->conf.gt_type != XHDMIPHY_GTYE5 &&
+	    inst->conf.gt_type != XHDMIPHY_GTYP) {
 		xhdmiphy_powerdown_gtpll(inst, (pll_type == XHDMIPHY_PLL_CPLL) ?
 					 XHDMIPHY_CHID_CHA :
 					 XHDMIPHY_CHID_CMNA, true);
@@ -1832,7 +1852,8 @@ static void xhdmiphy_tx_freqchnage_handler(struct xhdmiphy_dev *inst)
 	xhdmiphy_set(inst, XHDMIPHY_CLKDET_CTRL_REG,
 		     XHDMIPHY_CLKDET_CTRL_TX_TMR_CLR_MASK);
 
-	if (inst->conf.gt_type != XHDMIPHY_GTYE5)
+	if (inst->conf.gt_type != XHDMIPHY_GTYE5 &&
+	    inst->conf.gt_type != XHDMIPHY_GTYP)
 		xhdmiphy_tx_align_start(inst, XHDMIPHY_CHID_CHA, false);
 
 	xhdmiphy_ch2ids(inst, XHDMIPHY_CHID_CHA, &id0, &id1);
@@ -1882,7 +1903,8 @@ static void xhdmiphy_rx_freqchange_handler(struct xhdmiphy_dev *inst)
 		inst->rx_refclk_hz = rx_refclk;
 
 	/* If the RX frequency has changed, the PLL is always disabled */
-	if (inst->conf.gt_type != XHDMIPHY_GTYE5) {
+	if (inst->conf.gt_type != XHDMIPHY_GTYE5 &&
+	    inst->conf.gt_type != XHDMIPHY_GTYP) {
 		xhdmiphy_powerdown_gtpll(inst, (pll_type == XHDMIPHY_PLL_CPLL) ?
 					 XHDMIPHY_CHID_CHA :
 					 XHDMIPHY_CHID_CMNA, true);
@@ -1932,7 +1954,8 @@ void xhdmiphy_gt_handler(struct xhdmiphy_dev *inst, u32 event_ack, u32 event)
 					    XHDMIPHY_CHID_CH1);
 	rx_pll_type = xhdmiphy_get_pll_type(inst, XHDMIPHY_DIR_RX,
 					    XHDMIPHY_CHID_CH1);
-	if (inst->conf.gt_type != XHDMIPHY_GTYE5) {
+	if (inst->conf.gt_type != XHDMIPHY_GTYE5 &&
+	    inst->conf.gt_type != XHDMIPHY_GTYP) {
 		if ((event & XHDMIPHY_INTR_QPLL0_LOCK_MASK) ||
 		    (event & XHDMIPHY_INTR_QPLL1_LOCK_MASK))
 			xhdmiphy_qpll_lock_handler(inst);

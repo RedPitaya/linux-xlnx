@@ -9,9 +9,6 @@
 
 #include <linux/pxa2xx_ssp.h>
 
-#define PXA2XX_CS_ASSERT (0x01)
-#define PXA2XX_CS_DEASSERT (0x02)
-
 struct dma_chan;
 
 /*
@@ -22,7 +19,7 @@ struct pxa2xx_spi_controller {
 	u16 num_chipselect;
 	u8 enable_dma;
 	u8 dma_burst_size;
-	bool is_slave;
+	bool is_target;
 
 	/* DMA engine specific config */
 	bool (*dma_filter)(struct dma_chan *chan, void *param);
@@ -34,7 +31,7 @@ struct pxa2xx_spi_controller {
 };
 
 /*
- * The controller specific data for SPI slave devices
+ * The controller specific data for SPI target devices
  * (resides in spi_board_info.controller_data),
  * copied to spi_device.platform_data ... mostly for
  * DMA tuning.
@@ -45,9 +42,6 @@ struct pxa2xx_spi_chip {
 	u8 rx_threshold;
 	u8 dma_burst_size;
 	u32 timeout;
-	u8 enable_loopback;
-	int gpio_cs;
-	void (*cs_control)(u32 command);
 };
 
 #if defined(CONFIG_ARCH_PXA) || defined(CONFIG_ARCH_MMP)

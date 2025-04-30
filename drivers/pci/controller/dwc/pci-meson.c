@@ -9,7 +9,6 @@
 #include <linux/clk.h>
 #include <linux/delay.h>
 #include <linux/gpio/consumer.h>
-#include <linux/of_device.h>
 #include <linux/of_gpio.h>
 #include <linux/pci.h>
 #include <linux/platform_device.h>
@@ -17,6 +16,7 @@
 #include <linux/resource.h>
 #include <linux/types.h>
 #include <linux/phy/phy.h>
+#include <linux/mod_devicetable.h>
 #include <linux/module.h>
 
 #include "pcie-designware.h"
@@ -163,6 +163,13 @@ static int meson_pcie_reset(struct meson_pcie *mp)
 	return 0;
 }
 
+static inline void meson_pcie_disable_clock(void *data)
+{
+	struct clk *clk = data;
+
+	clk_disable_unprepare(clk);
+}
+
 static inline struct clk *meson_pcie_probe_clock(struct device *dev,
 						 const char *id, u64 rate)
 {
@@ -187,9 +194,7 @@ static inline struct clk *meson_pcie_probe_clock(struct device *dev,
 		return ERR_PTR(ret);
 	}
 
-	devm_add_action_or_reset(dev,
-				 (void (*) (void *))clk_disable_unprepare,
-				 clk);
+	devm_add_action_or_reset(dev, meson_pcie_disable_clock, clk);
 
 	return clk;
 }
@@ -313,14 +318,14 @@ static int meson_pcie_rd_own_conf(struct pci_bus *bus, u32 devfn,
 	 * cannot program the PCI_CLASS_DEVICE register, so we must fabricate
 	 * the return value in the config accessors.
 	 */
-	if (where == PCI_CLASS_REVISION && size == 4)
-		*val = (PCI_CLASS_BRIDGE_PCI << 16) | (*val & 0xffff);
-	else if (where == PCI_CLASS_DEVICE && size == 2)
-		*val = PCI_CLASS_BRIDGE_PCI;
-	else if (where == PCI_CLASS_DEVICE && size == 1)
-		*val = PCI_CLASS_BRIDGE_PCI & 0xff;
-	else if (where == PCI_CLASS_DEVICE + 1 && size == 1)
-		*val = (PCI_CLASS_BRIDGE_PCI >> 8) & 0xff;
+	if ((where & ~3) == PCI_CLASS_REVISION) {
+		if (size <= 2)
+			*val = (*val & ((1 << (size * 8)) - 1)) << (8 * (where & 3));
+		*val &= ~0xffffff00;
+		*val |= PCI_CLASS_BRIDGE_PCI_NORMAL << 8;
+		if (size <= 2)
+			*val = (*val >> (8 * (where & 3))) & ((1 << (size * 8)) - 1);
+	}
 
 	return PCIBIOS_SUCCESSFUL;
 }
@@ -370,7 +375,7 @@ static int meson_pcie_link_up(struct dw_pcie *pci)
 	return 0;
 }
 
-static int meson_pcie_host_init(struct pcie_port *pp)
+static int meson_pcie_host_init(struct dw_pcie_rp *pp)
 {
 	struct dw_pcie *pci = to_dw_pcie_from_pp(pp);
 	struct meson_pcie *mp = to_meson_pcie(pci);

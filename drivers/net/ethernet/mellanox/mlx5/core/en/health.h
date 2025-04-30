@@ -18,6 +18,7 @@ void mlx5e_reporter_tx_create(struct mlx5e_priv *priv);
 void mlx5e_reporter_tx_destroy(struct mlx5e_priv *priv);
 void mlx5e_reporter_tx_err_cqe(struct mlx5e_txqsq *sq);
 int mlx5e_reporter_tx_timeout(struct mlx5e_txqsq *sq);
+void mlx5e_reporter_tx_ptpsq_unhealthy(struct mlx5e_ptpsq *ptpsq);
 
 int mlx5e_health_cq_diag_fmsg(struct mlx5e_cq *cq, struct devlink_fmsg *fmsg);
 int mlx5e_health_cq_common_diag_fmsg(struct mlx5e_cq *cq, struct devlink_fmsg *fmsg);
@@ -30,9 +31,10 @@ void mlx5e_reporter_rx_destroy(struct mlx5e_priv *priv);
 void mlx5e_reporter_icosq_cqe_err(struct mlx5e_icosq *icosq);
 void mlx5e_reporter_rq_cqe_err(struct mlx5e_rq *rq);
 void mlx5e_reporter_rx_timeout(struct mlx5e_rq *rq);
+void mlx5e_reporter_icosq_suspend_recovery(struct mlx5e_channel *c);
+void mlx5e_reporter_icosq_resume_recovery(struct mlx5e_channel *c);
 
 #define MLX5E_REPORTER_PER_Q_MAX_LEN 256
-#define MLX5E_REPORTER_FLUSH_TIMEOUT_MSEC 2000
 
 struct mlx5e_err_ctx {
 	int (*recover)(void *ctx);

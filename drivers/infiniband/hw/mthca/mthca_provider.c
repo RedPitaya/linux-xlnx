@@ -50,19 +50,11 @@
 #include <rdma/mthca-abi.h>
 #include "mthca_memfree.h"
 
-static void init_query_mad(struct ib_smp *mad)
-{
-	mad->base_version  = 1;
-	mad->mgmt_class    = IB_MGMT_CLASS_SUBN_LID_ROUTED;
-	mad->class_version = 1;
-	mad->method    	   = IB_MGMT_METHOD_GET;
-}
-
 static int mthca_query_device(struct ib_device *ibdev, struct ib_device_attr *props,
 			      struct ib_udata *uhw)
 {
-	struct ib_smp *in_mad  = NULL;
-	struct ib_smp *out_mad = NULL;
+	struct ib_smp *in_mad;
+	struct ib_smp *out_mad;
 	int err = -ENOMEM;
 	struct mthca_dev *mdev = to_mdev(ibdev);
 
@@ -78,7 +70,7 @@ static int mthca_query_device(struct ib_device *ibdev, struct ib_device_attr *pr
 
 	props->fw_ver              = mdev->fw_ver;
 
-	init_query_mad(in_mad);
+	ib_init_query_mad(in_mad);
 	in_mad->attr_id = IB_SMP_ATTR_NODE_INFO;
 
 	err = mthca_MAD_IFC(mdev, 1, 1,
@@ -129,8 +121,8 @@ static int mthca_query_device(struct ib_device *ibdev, struct ib_device_attr *pr
 static int mthca_query_port(struct ib_device *ibdev,
 			    u32 port, struct ib_port_attr *props)
 {
-	struct ib_smp *in_mad  = NULL;
-	struct ib_smp *out_mad = NULL;
+	struct ib_smp *in_mad;
+	struct ib_smp *out_mad;
 	int err = -ENOMEM;
 
 	in_mad  = kzalloc(sizeof *in_mad, GFP_KERNEL);
@@ -140,7 +132,7 @@ static int mthca_query_port(struct ib_device *ibdev,
 
 	/* props being zeroed by the caller, avoid zeroing it here */
 
-	init_query_mad(in_mad);
+	ib_init_query_mad(in_mad);
 	in_mad->attr_id  = IB_SMP_ATTR_PORT_INFO;
 	in_mad->attr_mod = cpu_to_be32(port);
 
@@ -225,8 +217,8 @@ out:
 static int mthca_query_pkey(struct ib_device *ibdev,
 			    u32 port, u16 index, u16 *pkey)
 {
-	struct ib_smp *in_mad  = NULL;
-	struct ib_smp *out_mad = NULL;
+	struct ib_smp *in_mad;
+	struct ib_smp *out_mad;
 	int err = -ENOMEM;
 
 	in_mad  = kzalloc(sizeof *in_mad, GFP_KERNEL);
@@ -234,7 +226,7 @@ static int mthca_query_pkey(struct ib_device *ibdev,
 	if (!in_mad || !out_mad)
 		goto out;
 
-	init_query_mad(in_mad);
+	ib_init_query_mad(in_mad);
 	in_mad->attr_id  = IB_SMP_ATTR_PKEY_TABLE;
 	in_mad->attr_mod = cpu_to_be32(index / 32);
 
@@ -254,8 +246,8 @@ static int mthca_query_pkey(struct ib_device *ibdev,
 static int mthca_query_gid(struct ib_device *ibdev, u32 port,
 			   int index, union ib_gid *gid)
 {
-	struct ib_smp *in_mad  = NULL;
-	struct ib_smp *out_mad = NULL;
+	struct ib_smp *in_mad;
+	struct ib_smp *out_mad;
 	int err = -ENOMEM;
 
 	in_mad  = kzalloc(sizeof *in_mad, GFP_KERNEL);
@@ -263,7 +255,7 @@ static int mthca_query_gid(struct ib_device *ibdev, u32 port,
 	if (!in_mad || !out_mad)
 		goto out;
 
-	init_query_mad(in_mad);
+	ib_init_query_mad(in_mad);
 	in_mad->attr_id  = IB_SMP_ATTR_PORT_INFO;
 	in_mad->attr_mod = cpu_to_be32(port);
 
@@ -274,7 +266,7 @@ static int mthca_query_gid(struct ib_device *ibdev, u32 port,
 
 	memcpy(gid->raw, out_mad->data + 8, 8);
 
-	init_query_mad(in_mad);
+	ib_init_query_mad(in_mad);
 	in_mad->attr_id  = IB_SMP_ATTR_GUID_INFO;
 	in_mad->attr_mod = cpu_to_be32(index / 8);
 
@@ -997,8 +989,8 @@ static const struct attribute_group mthca_attr_group = {
 
 static int mthca_init_node_data(struct mthca_dev *dev)
 {
-	struct ib_smp *in_mad  = NULL;
-	struct ib_smp *out_mad = NULL;
+	struct ib_smp *in_mad;
+	struct ib_smp *out_mad;
 	int err = -ENOMEM;
 
 	in_mad  = kzalloc(sizeof *in_mad, GFP_KERNEL);
@@ -1006,7 +998,7 @@ static int mthca_init_node_data(struct mthca_dev *dev)
 	if (!in_mad || !out_mad)
 		goto out;
 
-	init_query_mad(in_mad);
+	ib_init_query_mad(in_mad);
 	in_mad->attr_id = IB_SMP_ATTR_NODE_DESC;
 
 	err = mthca_MAD_IFC(dev, 1, 1,

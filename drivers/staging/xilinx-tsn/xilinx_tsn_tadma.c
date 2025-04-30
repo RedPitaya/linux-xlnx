@@ -108,12 +108,11 @@ static void tadma_xmit_done(struct net_device *ndev, u8 sid, u32 cnt)
 {
 	struct axienet_local *lp = netdev_priv(ndev);
 	u32 size = 0, packets = 0;
-	unsigned long flags;
 
-	spin_lock_irqsave(&lp->tadma_tx_lock, flags);
+	spin_lock(&lp->tadma_tx_lock);
 
 	if (lp->tx_bd_head[sid] == lp->tx_bd_tail[sid]) {
-		spin_unlock_irqrestore(&lp->tadma_tx_lock, flags);
+		spin_unlock(&lp->tadma_tx_lock);
 		return;
 	}
 
@@ -147,7 +146,7 @@ static void tadma_xmit_done(struct net_device *ndev, u8 sid, u32 cnt)
 
 	ndev->stats.tx_packets += packets;
 	ndev->stats.tx_bytes += size;
-	spin_unlock_irqrestore(&lp->tadma_tx_lock, flags);
+	spin_unlock(&lp->tadma_tx_lock);
 }
 
 static irqreturn_t tadma_irq(int irq, void *_ndev)
@@ -165,6 +164,7 @@ static irqreturn_t tadma_irq(int irq, void *_ndev)
 	if (status & XTADMA_FFI_INT_EN) {
 		for (sid = 0; sid < lp->num_streams; sid++) {
 			cnt = 0;
+			spin_lock(&lp->tadma_tx_lock);
 			alm_offset = tadma_stream_alm_offset_irq(sid, lp->tx_bd_rd[sid], _ndev);
 			alm.cfg = tadma_ior(lp, alm_offset + 4);
 			while (((alm.cfg & XTADMA_ALM_UFF) == 0) &&
@@ -177,6 +177,7 @@ static irqreturn_t tadma_irq(int irq, void *_ndev)
 				alm.cfg = tadma_ior(lp, alm_offset + 4);
 				cnt++;
 			}
+			spin_unlock(&lp->tadma_tx_lock);
 			if (cnt)
 				tadma_xmit_done(_ndev, sid, cnt);
 		}
@@ -369,22 +370,6 @@ int __maybe_unused axienet_tadma_probe(struct platform_device *pdev,
 	of_node_put(np);
 
 	return 0;
-}
-
-static inline void tadma_pm_inc(int sid, struct axienet_local *lp)
-{
-	pm_entry_t pm;
-	u32 offset;
-	u8 wr;
-
-	offset = XTADMA_PM_OFFSET + (sid * sizeof(pm_entry_t));
-	pm = tadma_ior(lp, offset);
-	wr = (pm & XTADMA_PM_WR_MASK) >> XTADMA_PM_WR_SHIFT;
-	wr = (wr + 1) % lp->num_tadma_buffers;
-	pm &= ~XTADMA_PM_WR_MASK;
-	pm |= (wr << XTADMA_PM_WR_SHIFT);
-
-	tadma_iow(lp, offset, pm);
 }
 
 static int axienet_check_pm_space(int sid, int num_frag,

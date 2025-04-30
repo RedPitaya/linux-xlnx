@@ -7,29 +7,36 @@
  * Author: Venkateshwar Rao G <vgannava.xilinx.com>
  */
 
+#include <drm/display/drm_dp_helper.h>
+#include <drm/drm_atomic_helper.h>
+#include <drm/drm_connector.h>
+#include <drm/drm_crtc_helper.h>
+#include <drm/drm_framebuffer.h>
+#include <drm/drm_edid.h>
+#include <drm/drm_fourcc.h>
+#include <drm/drm_of.h>
+#include <drm/drm_probe_helper.h>
+#include <drm/drm_sysfs.h>
+
 #include <linux/bitfield.h>
 #include <linux/clk.h>
 #include <linux/component.h>
 #include <linux/delay.h>
+#include <linux/hdmi.h>
 #include <linux/module.h>
 #include <linux/mutex.h>
+#include <linux/mfd/syscon.h>
 #include <linux/of_device.h>
 #include <linux/phy/phy.h>
 #include <linux/platform_device.h>
 #include <linux/pm.h>
 #include <linux/sysfs.h>
 #include <linux/workqueue.h>
-
+#include <linux/xlnx/xlnx_timer.h>
 #include <uapi/linux/media-bus-format.h>
 
-#include <drm/drm_atomic_helper.h>
-#include <drm/drm_connector.h>
-#include <drm/drm_crtc_helper.h>
-#include <drm/drm_edid.h>
-#include <drm/drm_fourcc.h>
-#include <drm/drm_of.h>
-#include <drm/drm_probe_helper.h>
-#include <drm/drm_sysfs.h>
+#include "hdcp/xlnx_hdcp_tx.h"
+#include "xlnx_bridge.h"
 
 /* Parallel Interface registers */
 #define HDMI_TX_PIO_ID				0x40
@@ -74,6 +81,8 @@
 #define HDMI_TX_PIO_IN_HPD_CONNECT		BIT(2)
 #define HDMI_TX_PIO_IN_VID_RDY			BIT(1)
 #define HDMI_TX_PIO_IN_LNK_RDY			BIT(0)
+#define HDMI_TX_PIO_LNK_VID_RDY_MASK		(HDMI_TX_PIO_IN_VID_RDY | \
+						HDMI_TX_PIO_IN_LNK_RDY)
 #define HDMI_TX_PIO_IN_EVT			0x68
 #define HDMI_TX_PIO_IN_EVT_RE			0x6c
 #define HDMI_TX_PIO_IN_EVT_FE			0x70
@@ -82,6 +91,7 @@
 #define HDMI_TX_HPD_CONNECT_CONF		0x7c
 
 /* Display Data Channel registers */
+#define HDMI_HDCP_DDC_BASE_OFFSET		0x3a
 #define HDMI_TX_DDC_ID				0x80
 #define HDMI_TX_DDC_CTRL			0x84
 #define HDMI_TX_DDC_CTRL_CLK_DIV		GENMASK(31, 16)
@@ -208,7 +218,7 @@
 #define HDMI_TX_VTC_CTL_RU			BIT(1)
 
 #define HDMI_TX_VTC_GASIZE_F0			0x060
-#define HDMI_TX_VTC_ACTIVE_SIZE_MASK		GENMASK(12, 0)
+#define HDMI_TX_VTC_ACTIVE_SIZE_MASK		GENMASK(13, 0)
 
 #define HDMI_TX_VTC_GFENC			0x068
 #define HDMI_TX_VTC_GFENC_MASK			BIT(6)
@@ -233,25 +243,25 @@
 					 HDMI_TX_VTC_ACTIVE_VIDEO_POL)
 
 #define HDMI_TX_VTC_GHSIZE			0x070
-#define HDMI_TX_VTC_GHSIZE_FRAME_HSIZE		GENMASK(12, 0)
+#define HDMI_TX_VTC_GHSIZE_FRAME_HSIZE		GENMASK(13, 0)
 
 #define HDMI_TX_VTC_GVSIZE			0x074
 #define HDMI_TX_VTC_FIELD1_VSIZE_SHIFT		16
-#define HDMI_TX_VTC_GVSIZE_FRAME_VSIZE		GENMASK(12, 0)
+#define HDMI_TX_VTC_GVSIZE_FRAME_VSIZE		GENMASK(13, 0)
 
 #define HDMI_TX_VTC_GHSYNC			0x078
 #define HDMI_TX_VTC_GH1BPSTART_SHIFT		16
-#define HDMI_TX_VTC_GHSYNC_END_MASK		GENMASK(28, 16)
-#define HDMI_TX_VTC_GHSYNC_START_MASK		GENMASK(12, 0)
+#define HDMI_TX_VTC_GHSYNC_END_MASK		GENMASK(29, 16)
+#define HDMI_TX_VTC_GHSYNC_START_MASK		GENMASK(13, 0)
 
 #define HDMI_TX_VTC_GVBHOFF			0x07c
 #define HDMI_TX_VTC_F0VSYNC_HEND_SHIFT		16
-#define HDMI_TX_VTC_F0VBLANK_HEND_MASK		GENMASK(28, 16)
-#define HDMI_TX_VTC_F0VBLANK_HSTART_MASK	GENMASK(12, 0)
+#define HDMI_TX_VTC_F0VBLANK_HEND_MASK		GENMASK(29, 16)
+#define HDMI_TX_VTC_F0VBLANK_HSTART_MASK	GENMASK(13, 0)
 
 #define HDMI_TX_VTC_GVSYNC			0x080
-#define HDMI_TX_VTC_F0_VSYNC_VEND_MASK		GENMASK(28, 16)
-#define HDMI_TX_VTC_F0_VSYNC_VSTART_MASK	GENMASK(12, 0)
+#define HDMI_TX_VTC_F0_VSYNC_VEND_MASK		GENMASK(29, 16)
+#define HDMI_TX_VTC_F0_VSYNC_VSTART_MASK	GENMASK(13, 0)
 
 #define HDMI_TX_VTC_GVSHOFF			0x084
 #define HDMI_TX_VTC_GVBHOFF_F1			0x088
@@ -269,7 +279,7 @@
 #define HDMI_TX_CONNECT_CONF_VAL		0xA0064
 #define HDMI_TX_DDC_SLAVEADDR			0x54
 #define HDMI_TX_DDC_CLKDIV			100000
-#define HDMI_TX_DDC_EDID_LENGTH			256
+#define HDMI_TX_DDC_EDID_LENGTH			512
 #define HDMI_TX_DDC_EDID_SINK_BW		187
 #define HDMI_TX_DDC_EDID_BW_SHIFT		4
 #define HDMI_TX_DDC_ADDR			0x50
@@ -299,6 +309,8 @@
 #define HDMI_TX_DDC_STAT_FLGS_LN23_LN3_SHIFT	4
 
 #define HDMI_TX_FRL_CLK_CYCLES			0x3E7
+#define HDMI_TX_HDCP2x_ENABLE			0x404
+#define HDMI_TX_HDCP2x_ENABLE_BYPASS_DISABLE_MASK	BIT(0)
 #define HDMI_TX_PIXEL_MAXRATE			2376000
 #define HDMI_TX_PIXELRATE_GBPS			((u64)1e9)
 
@@ -319,6 +331,25 @@
 
 #define HDMI_TX_MAX_FRL_RATE	6
 #define HDMI_TX_SCDC_MASK	0xFF
+#define HDMI_TX_DEF_TMDS_CLK	148500000
+
+#define HDMI_HDCP_DPCD_READ	0x00
+#define HDMI_HDCP_DPCD_WRITE	BIT(0)
+#define HDMI_HDCP_STATUS	BIT(1)
+#define HDMI_HDCP_TIMER_OFFSET	0x30000
+#define HDMI_HDCP2X_OFFSET	0x40000
+#define HDMI_HDCP1X_OFFSET	0x20000
+#define HDMI_HDCP_MAX_KEYS	800
+
+#define HDMI_MIN_WIDTH	640
+#define HDMI_MIN_HEIGHT	480
+#define HDMI_MAX_WIDTH	10240
+#define HDMI_MAX_HEIGHT	4320
+
+#define XHDMI_AUX_PKT_HEADER_SIZE	4
+#define XHDMI_AUX_PKT_DATA_SIZE		32
+#define XHDMI_AUX_PKT_SIZE		(XHDMI_AUX_PKT_HEADER_SIZE + \
+					 XHDMI_AUX_PKT_DATA_SIZE)
 
 /**
  * enum hdmi_state - Stream state
@@ -419,14 +450,42 @@ xlnx_hdmi_scdc_field scdc_field[HDMI_TX_SCDC_FIELD_SIZE] = {
 	{0x30, 0x01, 1}	/* HDMI_TX_SCDCFIELD_FLT_NO_RETRAIN */
 };
 
+struct xlnx_hdmi_frlrate {
+	u8 lanes;
+	u8 linerate;
+};
+
+static const struct
+xlnx_hdmi_frlrate rate_table[] = {
+	{3, 0},	/* XHDMIC_MAXFRLRATE_NOT_SUPPORTED */
+	{3, 3},	/* XHDMIC_MAXFRLRATE_3X3GBITSPS */
+	{3, 6},	/* XHDMIC_MAXFRLRATE_3X6GBITSPS */
+	{4, 6},	/* XHDMIC_MAXFRLRATE_4X6GBITSPS */
+	{4, 8},	/* XHDMIC_MAXFRLRATE_4X8GBITSPS */
+	{4, 10},/* XHDMIC_MAXFRLRATE_4X10GBITSPS */
+	{4, 12},/* XHDMIC_MAXFRLRATE_4X12GBITSPS */
+};
+
 /**
  * struct xlnx_hdmi_frl_config - FRL config structure
+ * @max_frl_rate: maximum supported FRL rate
+ * @frl_rate: current FRL rate
+ * @max_linerate: maximum supported linerate
+ * @linerate: current linerate
+ * @max_lanes: maximum supported lanes
+ * @lanes: current lanes
  * @timer_cnt: frl timer
  * @timer_event: flag for timer event
  * @flt_no_timeout: flag for no timeout
  * @frl_train_states: indicates the frl training state
  */
 struct xlnx_hdmi_frl_config {
+	u8 max_frl_rate;
+	u8 frl_rate;
+	u8 max_linerate;
+	u8 linerate;
+	u8 max_lanes;
+	u8 lanes;
 	u16 timer_cnt;
 	u8 timer_event;
 	u8 flt_no_timeout;
@@ -439,12 +498,18 @@ struct xlnx_hdmi_frl_config {
  * @ppc: Pixels per component
  * @vid_interface: AXI_stream or Native interface
  * @max_frl_rate: maximum frl rate supported by hardware
+ * @htiming_div_fact: factor used in calculating htimings
+ * @hdcp2x_enable: flag to indicate hdcp22-enable property in device tree
+ * @hdcp1x_enable: flag to indicate hdcp-enable property in device tree
  */
 struct xlnx_hdmi_config {
 	enum color_depths bpc;
 	enum config_ppc ppc;
 	enum vid_interface vid_interface;
 	u8 max_frl_rate;
+	u8 htiming_div_fact;
+	bool hdcp2x_enable;
+	bool hdcp1x_enable;
 };
 
 /**
@@ -477,6 +542,7 @@ struct xlnx_hdmi_stream {
  * @base: device I/O memory for register access
  * @irq: hdmi subsystem irq
  * @phy: PHY handle for hdmi lanes
+ * @hdcp1x_keymgmt_base: HDCP Key management address
  * @hdmi_mutex: mutex to lock hdmi structure
  * @irq_lock: to lock irq handler
  * @cable_connected: flag to indicate cable state
@@ -492,6 +558,23 @@ struct xlnx_hdmi_stream {
  * @wait_for_streamup: Flag for stream up
  * @tmds_clk: TMDS clock
  * @wait_event: Wait event
+ * @bridge: bridge structure
+ * @height_out: configurable bridge output height parameter
+ * @saved_adjusted_mode: Copy of @drm_crtc_state.adjusted_mode
+ * @height_out_prop_val: configurable bridge output height parameter value
+ * @width_out: configurable bridge output width parameter
+ * @width_out_prop_val: configurable bridge output width parameter value
+ * @in_fmt: configurable bridge input media format
+ * @in_fmt_prop_val: configurable media bus format value
+ * @out_fmt: configurable bridge output media format
+ * @out_fmt_prop_val: configurable media bus format value
+ * @txhdcp: Hdcp configuration
+ * @hdcp_cp_irq_work: hdcp cp irq interrupt detection worker
+ * @hdcp2x_timer_irq: hdcp2x timer interrupt
+ * @hdcp1x_timer_irq: HDCP1X timer interrupt
+ * @hdcp_irq: HDCP1.4 protocol interrupt
+ * @aux_buffer: Aux packet buffer
+ * @iframe: AVI infroframe structure
  */
 struct xlnx_hdmi {
 	struct device *dev;
@@ -500,6 +583,7 @@ struct xlnx_hdmi {
 	void __iomem *base;
 	int irq;
 	struct phy *phy[HDMI_MAX_LANES];
+	struct regmap *hdcp1x_keymgmt_base;
 	/* to lock hdmi */
 	struct mutex hdmi_mutex;
 	/* to lock irq */
@@ -515,8 +599,25 @@ struct xlnx_hdmi {
 	u32 intr_status;
 	u32 frl_status;
 	u32 wait_for_streamup:1;
-	u32 tmds_clk;
+	u64 tmds_clk;
 	wait_queue_head_t wait_event;
+	struct xlnx_bridge *bridge;
+	struct drm_property *height_out;
+	u32 height_out_prop_val;
+	struct drm_property *width_out;
+	struct drm_display_mode saved_adjusted_mode;
+	u32 width_out_prop_val;
+	struct drm_property *in_fmt;
+	u32 in_fmt_prop_val;
+	struct drm_property *out_fmt;
+	u32 out_fmt_prop_val;
+	struct delayed_work hdcp_cp_irq_work;
+	struct xlnx_hdcptx txhdcp;
+	int hdcp2x_timer_irq;
+	int hdcp1x_timer_irq;
+	int hdcp_irq;
+	u32 aux_buffer[XHDMI_AUX_PKT_SIZE / sizeof(u32)];
+	struct hdmi_avi_infoframe iframe;
 };
 
 enum xlnx_hdmitx_clks {
@@ -576,6 +677,14 @@ static struct clk_bulk_data hdmitx_clks[] = {
 	xlnx_hdmi_writel(hdmi, HDMI_TX_PIO_OUT_CLR,\
 			 HDMI_TX_PIO_OUT_BRIDGE_PIXEL)
 
+#define xlnx_pioout_bridge_pixel_set(hdmi) \
+	xlnx_hdmi_writel(hdmi, HDMI_TX_PIO_OUT_SET,\
+			 HDMI_TX_PIO_OUT_BRIDGE_PIXEL)
+
+#define xlnx_pioout_bridge_yuv_set(hdmi) \
+	xlnx_hdmi_writel(hdmi, HDMI_TX_PIO_OUT_SET,\
+			 HDMI_TX_PIO_OUT_BRIDGE_YUV420)
+
 #define xlnx_hdmi_auxintr_enable(hdmi) \
 	xlnx_hdmi_writel(hdmi, HDMI_TX_AUX_CTRL_SET,\
 			 HDMI_TX_AUD_CTRL_IE)
@@ -599,6 +708,10 @@ static struct clk_bulk_data hdmitx_clks[] = {
 
 #define xlnx_hdmi_ddc_intr_disable(hdmi) \
 	xlnx_hdmi_writel(hdmi, HDMI_TX_DDC_CTRL_CLR,\
+			 HDMI_TX_DDC_CTRL_IE)
+
+#define xlnx_hdmi_ddc_intr_enable(hdmi) \
+	xlnx_hdmi_writel(hdmi, HDMI_TX_DDC_CTRL_SET,\
 			 HDMI_TX_DDC_CTRL_IE)
 
 #define xlnx_hdmi_ddc_stop_cmd(hdmi) \
@@ -726,6 +839,50 @@ static struct clk_bulk_data hdmitx_clks[] = {
 #define xlnx_hdmi_vtc_disable(hdmi) \
 	xlnx_hdmi_vtc_clr(hdmi, HDMI_TX_VTC_CTL, HDMI_TX_VTC_CTL_GE)
 
+static ssize_t xlnx_hdcp_key_store(struct device *sysfs_dev, struct device_attribute *attr,
+				   const char *buf, size_t count)
+{
+	int ret = -EINVAL;
+	struct xlnx_hdmi *hdmi = (struct xlnx_hdmi *)dev_get_drvdata(sysfs_dev);
+	struct xlnx_hdcptx *xhdcp = &hdmi->txhdcp;
+
+	if (!(hdmi->config.hdcp2x_enable || hdmi->config.hdcp1x_enable))
+		return ret;
+
+	if (IS_ERR(xhdcp->xhdcp2x)) {
+		dev_err(hdmi->dev, "No HDCP2X module is Registered\n");
+		return PTR_ERR(xhdcp->xhdcp2x);
+	}
+
+	ret = xlnx_hdcp_tx_set_keys(xhdcp, (const u8 *)buf);
+	if (ret) {
+		dev_err(xhdcp->dev, "failed to send HDCP key from Sysfs to common layer");
+		return ret;
+	}
+
+	if (hdmi->config.hdcp2x_enable || hdmi->config.hdcp1x_enable) {
+		ret = xlnx_start_hdcp_engine(&hdmi->txhdcp,
+					     HDMI_MAX_LANES);
+		if (ret < 0) {
+			dev_err(hdmi->dev, "Failed to Start HDCP engine\n");
+			return ret;
+		}
+	}
+
+	return count;
+}
+
+static DEVICE_ATTR(xlnx_hdcp_key, 0600/*S_IRUSR | S_IWUSR*/, NULL, xlnx_hdcp_key_store);
+
+static struct attribute *xlnx_hdcp_key_attrs[] = {
+	&dev_attr_xlnx_hdcp_key.attr,
+	NULL,
+};
+
+static struct attribute_group xlnx_hdcp_key_attr_group = {
+	.attrs = xlnx_hdcp_key_attrs,
+};
+
 static inline void
 xlnx_hdmi_writel(struct xlnx_hdmi *hdmi, u32 offset, u32 val)
 {
@@ -785,6 +942,34 @@ struct xlnx_hdmi *connector_to_hdmi(struct drm_connector *connector)
 	return container_of(connector, struct xlnx_hdmi, connector);
 }
 
+static bool xlnx_hdmi_is_lnk_vid_rdy(struct xlnx_hdmi *hdmi)
+{
+	u32 reg_val;
+
+	reg_val = xlnx_hdmi_readl(hdmi, HDMI_TX_PIO_IN);
+	reg_val = FIELD_GET(HDMI_TX_PIO_LNK_VID_RDY_MASK, reg_val);
+	if (reg_val == HDMI_TX_PIO_LNK_VID_RDY_MASK)
+		return true;
+
+	return false;
+}
+
+static int xlnx_hdmi_phy_configure(struct xlnx_hdmi *hdmi,
+				   union phy_configure_opts *opts)
+{
+	int ret = 0, i;
+
+	for (i = 0; i < HDMI_MAX_LANES; i++) {
+		ret = phy_configure(hdmi->phy[i], opts);
+		if (ret) {
+			dev_err(hdmi->dev, "phy_configure error %d\n", ret);
+			return ret;
+		}
+	}
+
+	return ret;
+}
+
 /**
  * xlnx_hdmi_vtc_set_timing - configure video timing parameters
  * @hdmi: hdmi tx instance
@@ -809,10 +994,23 @@ static void xlnx_hdmi_vtc_set_timing(struct xlnx_hdmi *hdmi,
 	reg = xlnx_hdmi_vtc_readl(hdmi, HDMI_TX_VTC_CTL);
 	xlnx_hdmi_vtc_writel(hdmi, HDMI_TX_VTC_CTL, reg | HDMI_TX_VTC_CTL_RU);
 
-	hactive = mode->hdisplay / hdmi->config.ppc;
-	hfront_porch = (mode->hsync_start - mode->hdisplay) / hdmi->config.ppc;
-	hback_porch = (mode->htotal - mode->hsync_end) / hdmi->config.ppc;
-	hsync_len = (mode->hsync_end - mode->hsync_start) / hdmi->config.ppc;
+	hactive = mode->hdisplay / hdmi->config.htiming_div_fact;
+	hfront_porch = (mode->hsync_start - mode->hdisplay) /
+		hdmi->config.htiming_div_fact;
+	hback_porch = (mode->htotal - mode->hsync_end) /
+		hdmi->config.htiming_div_fact;
+	hsync_len = (mode->hsync_end - mode->hsync_start) /
+		hdmi->config.htiming_div_fact;
+	if (hdmi->xvidc_colorfmt == HDMI_TX_CSF_YCRCB_420) {
+		if (hactive & 0x1 || hfront_porch & 0x1 ||
+		    hback_porch & 0x1 || hsync_len & 0x1)
+			dev_dbg(hdmi->dev, "VTC does not support this timing\n");
+
+		hactive = hactive / 2;
+		hfront_porch = hfront_porch / 2;
+		hback_porch = hback_porch / 2;
+		hsync_len = hsync_len / 2;
+	}
 	htotal = hactive + hfront_porch + hsync_len + hback_porch;
 	hsync_start = hactive + hfront_porch;
 	hbackporch_start = hsync_start + hsync_len;
@@ -844,8 +1042,8 @@ static void xlnx_hdmi_vtc_set_timing(struct xlnx_hdmi *hdmi,
 		HDMI_TX_VTC_GHSYNC_END_MASK;
 	xlnx_hdmi_vtc_writel(hdmi, HDMI_TX_VTC_GHSYNC, reg);
 
-	reg = vsync_start & HDMI_TX_VTC_F0_VSYNC_VSTART_MASK;
-	reg |= (vbackporch_start << HDMI_TX_VTC_FIELD1_VSIZE_SHIFT) &
+	reg = (vsync_start - 1) & HDMI_TX_VTC_F0_VSYNC_VSTART_MASK;
+	reg |= ((vbackporch_start - 1) << HDMI_TX_VTC_FIELD1_VSIZE_SHIFT) &
 		HDMI_TX_VTC_F0_VSYNC_VEND_MASK;
 	xlnx_hdmi_vtc_writel(hdmi, HDMI_TX_VTC_GVSYNC, reg);
 	xlnx_hdmi_clr(hdmi, HDMI_TX_VTC_BASE + HDMI_TX_VTC_GFENC,
@@ -1388,6 +1586,100 @@ xlnx_hdmi_clkratio(struct xlnx_hdmi *hdmi)
 	return status;
 }
 
+static void xlnx_hdmi_avi_infoframe_colorspace(struct hdmi_avi_infoframe *frame,
+					       enum color_formats fmt)
+{
+	switch (fmt) {
+	case HDMI_TX_CSF_RGB:
+		frame->colorspace = HDMI_COLORSPACE_RGB;
+		break;
+	case HDMI_TX_CSF_YCRCB_420:
+		frame->colorspace = HDMI_COLORSPACE_YUV420;
+		break;
+	case HDMI_TX_CSF_YCRCB_422:
+		frame->colorspace = HDMI_COLORSPACE_YUV422;
+		break;
+	case HDMI_TX_CSF_YCRCB_444:
+		frame->colorspace = HDMI_COLORSPACE_YUV444;
+		break;
+	default:
+		break;
+	}
+}
+
+static void xlnx_hdmi_aux_write(struct xlnx_hdmi *hdmi)
+{
+	int index;
+	u32 readval;
+
+	readval = xlnx_hdmi_readl(hdmi, HDMI_TX_AUX_STA);
+
+	if ((readval & (HDMI_TX_AUX_STA_PKT_RDY | HDMI_TX_AUX_STA_FL))) {
+		if (readval & HDMI_TX_AUX_STA_FL) {
+			dev_dbg(hdmi->dev, "HDMI TX AUX FIFO full\n");
+		} else {
+			for (index = 0; index < (XHDMI_AUX_PKT_SIZE / sizeof(u32)); index++) {
+				xlnx_hdmi_writel(hdmi, HDMI_TX_AUX_DAT,
+						 hdmi->aux_buffer[index]);
+			}
+		}
+	}
+}
+
+static ssize_t xlnx_hdmi_send_avi_infoframe(struct xlnx_hdmi *hdmi)
+{
+	struct hdmi_avi_infoframe *frame = &hdmi->iframe;
+	u8 *ptr = (u8 *)hdmi->aux_buffer;
+	u8 buffer[HDMI_INFOFRAME_SIZE(AVI)] = {0};
+	int ret;
+	ssize_t err;
+
+	ret = drm_hdmi_avi_infoframe_from_display_mode(frame,
+						       &hdmi->connector,
+						       &hdmi->saved_adjusted_mode);
+	if (ret < 0) {
+		dev_err(hdmi->dev, "couldn't fill AVI infoframe\n");
+		return ret;
+	}
+
+	xlnx_hdmi_avi_infoframe_colorspace(frame, hdmi->xvidc_colorfmt);
+	err = hdmi_avi_infoframe_pack(frame, buffer, HDMI_INFOFRAME_SIZE(AVI));
+	if (err < 0) {
+		dev_err(hdmi->dev, "Failed to pack AVI infoframe: %zd\n", err);
+		return err;
+	}
+
+	/*
+	 * As per the Table 8-1 in HDMI 1.4b specification, packetization of
+	 * AVI Infoframe is like: HB0 HB1 HB2 PB0 PB1 .....PB27.
+	 */
+
+	/* Setting AVI Infoframe packet header from HB0 to HB2 */
+	ptr[0] = buffer[0];
+	ptr[1] = buffer[1];
+	ptr[2] = buffer[2];
+	/* Checksum (this will be calculated by the HDMI TX IP) */
+	ptr[3] = 0x0;
+
+	/* Copying PB0 - PB27 from offset 4 in the buffer */
+	memcpy((void *)(&ptr[4]), (void *)(&buffer[3]),
+	       (HDMI_INFOFRAME_SIZE(AVI) - HDMI_INFOFRAME_HEADER_SIZE));
+
+	xlnx_hdmi_aux_write(hdmi);
+
+	return 0;
+}
+
+static void xlnx_hdmi_send_infoframes(struct xlnx_hdmi *hdmi)
+{
+	xlnx_hdmi_send_avi_infoframe(hdmi);
+}
+
+static void xlnx_hdmi_vsync_event_handler(struct xlnx_hdmi *hdmi)
+{
+	xlnx_hdmi_send_infoframes(hdmi);
+}
+
 /**
  * xlnx_hdmi_stream_start - set core parameters
  * @hdmi: pointer to HDMI TX core instance
@@ -1505,6 +1797,56 @@ xlnx_hdmi_set_frl_ltp(struct xlnx_hdmi *hdmi, u8 lane, u8 ltp_type)
 	xlnx_hdmi_writel(hdmi, HDMI_TX_FRL_CTRL, data);
 }
 
+static void xlnx_hdmi_streamup_callback(struct xlnx_hdmi *hdmi)
+{
+	union phy_configure_opts phy_cfg = {0};
+	int ret;
+
+	if (hdmi->stream.is_frl)
+		xlnx_hdmi_frl_mode_enable(hdmi);
+	else
+		xlnx_hdmi_frl_mode_disable(hdmi);
+
+	phy_cfg.hdmi.get_samplerate = 1;
+	ret = xlnx_hdmi_phy_configure(hdmi, &phy_cfg);
+	if (ret) {
+		dev_err(hdmi->dev, "phy_cfg: get_samplerate err %d\n", ret);
+		return;
+	}
+	/* Set the sample rate got from HMDI-PHY */
+	xlnx_hdmi_set_samplerate(hdmi,
+				 phy_cfg.hdmi.samplerate);
+	xlnx_hdmi_stream_start(hdmi);
+
+	phy_cfg.hdmi.clkout1_obuftds = 1;
+	phy_cfg.hdmi.clkout1_obuftds_en = true;
+	ret = xlnx_hdmi_phy_configure(hdmi, &phy_cfg);
+	if (ret) {
+		dev_err(hdmi->dev, "phy_cfg: obuftds_en err %d\n", ret);
+		return;
+	}
+
+	/* release vid_in bridge resets */
+	xlnx_hdmi_ext_sysrst_deassert(hdmi);
+	xlnx_hdmi_ext_vrst_deassert(hdmi);
+	/* release tx core resets */
+	xlnx_hdmi_int_lrst_deassert(hdmi);
+	xlnx_hdmi_int_vrst_deassert(hdmi);
+
+	if (hdmi->xvidc_colorfmt == HDMI_TX_CSF_YCRCB_420) {
+		xlnx_pioout_bridge_yuv_set(hdmi);
+		xlnx_pioout_bridge_pixel_clr(hdmi);
+	} else {
+		if (hdmi->iframe.pixel_repeat) {
+			xlnx_pioout_bridge_yuv_clr(hdmi);
+			xlnx_pioout_bridge_pixel_set(hdmi);
+		} else {
+			xlnx_pioout_bridge_yuv_clr(hdmi);
+			xlnx_pioout_bridge_pixel_clr(hdmi);
+		}
+	}
+}
+
 /**
  * xlnx_hdmi_set_frl_timer: sets the frl timer value
  * @hdmi: pinter to HDMI TX core instance
@@ -1536,6 +1878,219 @@ static void xlnx_hdmi_clear_frl_ltp(struct xlnx_hdmi *hdmi)
 		xlnx_hdmi_set_frl_ltp(hdmi, index, HDMI_TX_LTP_NO_LTP);
 }
 
+static int xlnx_hdmi_set_frl_rate(struct xlnx_hdmi *hdmi, u8 frlrate)
+{
+	if (!frlrate) {
+		dev_err(hdmi->dev, "frl_rate %d not supported\n", frlrate);
+		return 1;
+	}
+	hdmi->stream.frl_config.frl_rate = frlrate;
+	hdmi->stream.frl_config.lanes = rate_table[frlrate].lanes;
+	hdmi->stream.frl_config.linerate = rate_table[frlrate].linerate;
+
+	dev_dbg(hdmi->dev, "Setting FRL rate @%d Gbps\n", rate_table[frlrate].linerate);
+	/* Set lanes */
+	if (hdmi->stream.frl_config.lanes == 4)
+		xlnx_hdmi_writel(hdmi, HDMI_TX_FRL_CTRL_SET,
+				 HDMI_TX_FRL_CTRL_FRL_LN_OP);
+	else
+		xlnx_hdmi_writel(hdmi, HDMI_TX_FRL_CTRL_CLR,
+				 HDMI_TX_FRL_CTRL_FRL_LN_OP);
+	/*TODO: FFE levels needs to set here */
+	return xlnx_hdmi_ddcwrite_field(hdmi, HDMI_TX_SCDC_FIELD_SNK_CFG1,
+					frlrate);
+}
+
+/**
+ * xlnx_hdmi_reset - Reset the core and bridge
+ * @hdmi: HDMI core structure
+ *
+ * Returns: None
+ */
+static void xlnx_hdmi_reset(struct xlnx_hdmi *hdmi)
+{
+	/* hdmi core reset - assert */
+	xlnx_hdmi_int_lrst_assert(hdmi);
+	xlnx_hdmi_int_vrst_assert(hdmi);
+
+	/* vid out bridge reset */
+	xlnx_hdmi_ext_sysrst_assert(hdmi);
+	xlnx_hdmi_ext_vrst_assert(hdmi);
+
+	/* release vid in bridge resets */
+	xlnx_hdmi_ext_sysrst_deassert(hdmi);
+	xlnx_hdmi_ext_vrst_deassert(hdmi);
+
+	/* release hdmi tx core resets */
+	xlnx_hdmi_int_lrst_deassert(hdmi);
+	xlnx_hdmi_int_vrst_deassert(hdmi);
+}
+
+static void xlnx_hdmi_streamdown_callback(struct xlnx_hdmi *hdmi)
+{
+	xlnx_hdmi_reset(hdmi);
+	xlnx_hdmi_ddc_disable(hdmi);
+}
+
+static void xlnx_hdmi_tmdsconfig(struct xlnx_hdmi *hdmi)
+{
+	union phy_configure_opts phy_cfg = {0};
+	int ret;
+
+	phy_cfg.hdmi.ibufds = 1;
+	phy_cfg.hdmi.ibufds_en = true;
+	ret = xlnx_hdmi_phy_configure(hdmi, &phy_cfg);
+	if (ret) {
+		dev_err(hdmi->dev, "phy_cfg: Ibufds err %d\n", ret);
+		return;
+	}
+
+	phy_cfg.hdmi.clkout1_obuftds = 1;
+	phy_cfg.hdmi.clkout1_obuftds_en = false;
+	ret = xlnx_hdmi_phy_configure(hdmi, &phy_cfg);
+	if (ret) {
+		dev_err(hdmi->dev, "phy_cfg: obuftds_en err %d\n", ret);
+		return;
+	}
+
+	phy_cfg.hdmi.config_hdmi20 = 1;
+	ret = xlnx_hdmi_phy_configure(hdmi, &phy_cfg);
+	if (ret) {
+		dev_err(hdmi->dev, "phy_cfg: hdmi20 err %d\n", ret);
+		return;
+	}
+
+	xlnx_set_frl_link_clk(hdmi, 0);
+	xlnx_set_frl_vid_clk(hdmi, 0);
+	xlnx_hdmi_set_hdmi_mode(hdmi);
+}
+
+/**
+ * xlnx_hdmi_hdcp_reset - Reset hdcp module
+ * @hdmi: HDMI IP core structure
+ *
+ * This function resets HDCP cipher engine,
+ * protocol state machine and its internal parameters.
+ *
+ * Return: 0 on success, or the error code returned
+ * from the callee functions.
+ */
+static int xlnx_hdmi_hdcp_reset(struct xlnx_hdmi *hdmi)
+{
+	struct xlnx_hdcptx *xhdcp = &hdmi->txhdcp;
+	int ret;
+
+	cancel_delayed_work(&hdmi->hdcp_cp_irq_work);
+	ret = xlnx_hdcp_tx_reset(xhdcp);
+	if (ret < 0) {
+		dev_err(xhdcp->dev, "failed to reset HDCP");
+		return ret;
+	}
+
+	return 0;
+}
+
+static void xlnx_hdmi_connect_callback(struct xlnx_hdmi *hdmi)
+{
+	union phy_configure_opts phy_cfg = {0};
+	int ret;
+
+	if (hdmi->cable_connected) {
+		xlnx_hdmi_ddc_disable(hdmi);
+
+		hdmi->tmds_clk = HDMI_TX_DEF_TMDS_CLK;
+		xlnx_hdmi_stream_start(hdmi);
+		phy_cfg.hdmi.tx_params = 1;
+		phy_cfg.hdmi.ppc = hdmi->config.ppc;
+		phy_cfg.hdmi.bpc = hdmi->config.bpc;
+		phy_cfg.hdmi.fmt = hdmi->xvidc_colorfmt;
+		phy_cfg.hdmi.tx_tmdsclk = hdmi->tmds_clk;
+		ret = xlnx_hdmi_phy_configure(hdmi, &phy_cfg);
+		if (ret) {
+			dev_err(hdmi->dev, "phy_cfg: txparams error %d\n", ret);
+			return;
+		}
+
+		xlnx_hdmi_tmdsconfig(hdmi);
+	} else {
+		struct xlnx_hdcptx *xhdcp = &hdmi->txhdcp;
+
+		if (xhdcp->hdcp2xenable || xhdcp->hdcp1xenable) {
+			ret = xlnx_hdmi_hdcp_reset(hdmi);
+			if (ret < 0) {
+				dev_err(hdmi->dev, "failed to reset HDCP %d\n", ret);
+				return;
+			}
+		}
+		phy_cfg.hdmi.ibufds = 1;
+		phy_cfg.hdmi.ibufds_en = true;
+		ret = xlnx_hdmi_phy_configure(hdmi, &phy_cfg);
+		if (ret) {
+			dev_err(hdmi->dev, "phy_cfg: Ibufds err %d\n", ret);
+			return;
+		}
+	}
+}
+
+static void xlnx_hdmi_frl_config(struct xlnx_hdmi *hdmi)
+{
+	union phy_configure_opts phy_cfg = {0};
+	int ret;
+
+	/* Enable HDMI 2.1 config */
+	phy_cfg.hdmi.linerate =
+		(u64)(hdmi->stream.frl_config.linerate * HDMI_TX_PIXELRATE_GBPS);
+	phy_cfg.hdmi.nchannels = hdmi->stream.frl_config.lanes;
+	phy_cfg.hdmi.config_hdmi21 = 1;
+	ret = xlnx_hdmi_phy_configure(hdmi, &phy_cfg);
+	if (ret) {
+		dev_err(hdmi->dev, "phy_cfg: hdmi21 config failed\n");
+		return;
+	}
+
+	/* set FRL mode */
+	hdmi->stream.is_frl = 1;
+}
+
+static int xlnx_hdmi_sink_max_frl(struct xlnx_hdmi *hdmi)
+{
+	struct drm_connector *connector = &hdmi->connector;
+	int max_lanes, rate_per_lane, max_frl_rate;
+	int sink_max_frl_bw;
+
+	max_lanes = connector->display_info.hdmi.max_lanes;
+	rate_per_lane = connector->display_info.hdmi.max_frl_rate_per_lane;
+	max_frl_rate = max_lanes * rate_per_lane;
+
+	switch (max_frl_rate) {
+	case 9:
+		sink_max_frl_bw = DP_PCON_ENABLE_MAX_BW_9GBPS;
+		break;
+	case 18:
+		sink_max_frl_bw = DP_PCON_ENABLE_MAX_BW_18GBPS;
+		break;
+	case 24:
+		sink_max_frl_bw = DP_PCON_ENABLE_MAX_BW_24GBPS;
+		break;
+	case 32:
+		sink_max_frl_bw = DP_PCON_ENABLE_MAX_BW_32GBPS;
+		break;
+	case 40:
+		sink_max_frl_bw = DP_PCON_ENABLE_MAX_BW_40GBPS;
+		break;
+	case 48:
+		sink_max_frl_bw = DP_PCON_ENABLE_MAX_BW_48GBPS;
+		break;
+	case 0:
+		sink_max_frl_bw = DP_PCON_ENABLE_MAX_BW_0GBPS;
+		break;
+	default:
+		return -EINVAL;
+	}
+
+	return sink_max_frl_bw;
+}
+
 /**
  * xlnx_hdmi_frl_train_init: Initializes sink's SCDC for training.
  * @hdmi: Pointer to HDMI TX core instance
@@ -1544,17 +2099,25 @@ static void xlnx_hdmi_clear_frl_ltp(struct xlnx_hdmi *hdmi)
  */
 static int xlnx_hdmi_frl_train_init(struct xlnx_hdmi *hdmi)
 {
-	int status;
+	int status = 1;
+	int source_max_frl_bw, sink_max_frl_bw, max_frl_bw;
 
 	xlnx_hdmi_clear_frl_ltp(hdmi);
+	/*
+	 * Initialize the FRL module to send out GAP characters only for
+	 * link training
+	 */
 	xlnx_hdmi_set_frl_active(hdmi, HDMI_TX_FRL_ACTIVE_MODE_GAP_ONLY);
+
+	source_max_frl_bw = hdmi->config.max_frl_rate;
+	sink_max_frl_bw = xlnx_hdmi_sink_max_frl(hdmi);
+	max_frl_bw = min(sink_max_frl_bw, source_max_frl_bw);
+	if (max_frl_bw <= 0)
+		return 1;
+
+	/* Initialize the core to operate in FRL mode */
 	xlnx_hdmi_frl_mode_enable(hdmi);
-
-	xlnx_hdmi_writel(hdmi, HDMI_TX_FRL_CTRL_SET,
-			 HDMI_TX_FRL_CTRL_FRL_LN_OP);
-
-	status = xlnx_hdmi_ddcwrite_field(hdmi, HDMI_TX_SCDC_FIELD_SNK_CFG1,
-					  hdmi->config.max_frl_rate);
+	status = xlnx_hdmi_set_frl_rate(hdmi, max_frl_bw);
 	if (status)
 		return status;
 
@@ -1641,21 +2204,31 @@ static int xlnx_hdmi_exec_frl_state_lts1(struct xlnx_hdmi *hdmi)
 static int xlnx_hdmi_exec_frl_state_lts2(struct xlnx_hdmi *hdmi)
 {
 	union phy_configure_opts phy_cfg = {0};
-	int status, ret, i;
+	int status = 1, ret, i;
 	u8 ddc_buf, index;
 
 	hdmi->stream.frl_config.timer_cnt += TIMEOUT_5MS;
 	status = xlnx_hdmi_ddc_readreg(hdmi, HDMI_TX_DDC_SLAVEADDR, 1,
 				       HDMI_TX_DDC_STCR_REG, (u8 *)&ddc_buf);
-	if (status)
-		return status;
 
-	if (ddc_buf & HDMI_TX_DDC_STCR_FLT_NO_TIMEOUT_MASK)
-		hdmi->stream.frl_config.flt_no_timeout = true;
-	else
-		hdmi->stream.frl_config.flt_no_timeout = false;
+	/* Reset GTPLL before starting FRL Training */
+	phy_cfg.hdmi.resetgtpll = 1;
+	for (i = 0; i < HDMI_MAX_LANES; i++) {
+		ret = phy_configure(hdmi->phy[i], &phy_cfg);
+		if (ret) {
+			dev_err(hdmi->dev, "phy_cfg: resetgtpll config failed\n");
+			return ret;
+		}
+	}
 
-	status = xlnx_hdmi_ddcwrite_field(hdmi, HDMI_TX_SCDC_FIELD_SNK_STU, 1);
+	if (!status) {
+		if (ddc_buf & HDMI_TX_DDC_STCR_FLT_NO_TIMEOUT_MASK)
+			hdmi->stream.frl_config.flt_no_timeout = true;
+		else
+			hdmi->stream.frl_config.flt_no_timeout = false;
+
+		xlnx_hdmi_ddcwrite_field(hdmi, HDMI_TX_SCDC_FIELD_SNK_STU, 1);
+	}
 
 	/* Read FLT_NO_UPDATE SCDC Register */
 	if (!status && (hdmi->stream.frl_config.flt_no_timeout ||
@@ -1673,30 +2246,7 @@ static int xlnx_hdmi_exec_frl_state_lts2(struct xlnx_hdmi *hdmi)
 			hdmi->stream.frl_config.frl_train_states =
 					HDMI_TX_FRLSTATE_LTS_3_ARM;
 
-			/* Enable phy ibufds */
-			phy_cfg.hdmi.ibufds = 1;
-			phy_cfg.hdmi.ibufds_en = true;
-			for (i = 0; i < HDMI_MAX_LANES; i++) {
-				ret = phy_configure(hdmi->phy[i], &phy_cfg);
-				if (ret) {
-					dev_err(hdmi->dev, "phy_cfg: Ibufds config failed\n");
-					return ret;
-				}
-			}
-
-			/* Enable HDMI 2.1 config */
-			phy_cfg.hdmi.linerate =
-				(u64)(hdmi->stream.sink_max_linerate *
-				      HDMI_TX_PIXELRATE_GBPS);
-			phy_cfg.hdmi.nchannels = hdmi->stream.sink_max_lanes;
-			phy_cfg.hdmi.config_hdmi21 = 1;
-			for (i = 0; i < HDMI_MAX_LANES; i++) {
-				ret = phy_configure(hdmi->phy[i], &phy_cfg);
-				if (ret) {
-					dev_err(hdmi->dev, "phy_cfg: hdmi21 config failed\n");
-					return ret;
-				}
-			}
+			xlnx_hdmi_frl_config(hdmi);
 
 			/* set Nyquist Clock as link training pattern */
 			for (index = 0; index < HDMI_MAX_LANES; index++) {
@@ -1729,6 +2279,8 @@ static int xlnx_hdmi_exec_frl_state_lts2_ratewr(struct xlnx_hdmi *hdmi)
 	status = xlnx_hdmi_frl_train_init(hdmi);
 	if (status) {
 		dev_err(hdmi->dev, "lts2 train init failed\n");
+		hdmi->stream.frl_config.frl_train_states =
+			HDMI_TX_FRLSTATE_LTS_L;
 		return status;
 	}
 
@@ -1806,10 +2358,11 @@ static int xlnx_hdmi_exec_frl_state_lts3(struct xlnx_hdmi *hdmi)
 		hdmi->stream.frl_config.frl_train_states =
 			HDMI_TX_FRLSTATE_LTS_P_ARM;
 		xlnx_hdmi_set_frl_timer(hdmi, TIMEOUT_10US);
-		return status;
+		return 0;
 	} else if (ddc_buf[0] == 0xF && ddc_buf[1] == 0xF &&
 		   ddc_buf[2] == 0xF && ddc_buf[3] == 0xF) {
 		/* 0xF means a request to drop FRL rate */
+		hdmi->config.max_frl_rate = hdmi->config.max_frl_rate - 1;
 		hdmi->stream.frl_config.timer_cnt = 0;
 		hdmi->stream.frl_config.frl_train_states =
 			HDMI_TX_FRLSTATE_LTS_4;
@@ -1846,24 +2399,32 @@ static int xlnx_hdmi_exec_frl_state_lts4(struct xlnx_hdmi *hdmi)
 
 	xlnx_hdmi_set_frl_timer(hdmi, 0);
 	xlnx_hdmi_clear_frl_ltp(hdmi);
-	status = xlnx_hdmi_ddcwrite_field(hdmi,
-					  HDMI_TX_SCDC_FIELD_FLT_UPDATE, 1);
+
+	if (hdmi->stream.frl_config.max_frl_rate > 1) {
+		hdmi->config.max_frl_rate = hdmi->config.max_frl_rate - 1;
+		hdmi->stream.sink_max_linerate =
+			rate_table[hdmi->config.max_frl_rate].linerate;
+		hdmi->stream.sink_max_lanes = rate_table[hdmi->config.max_frl_rate].lanes;
+		status = 0;
+	} else {
+		status = 1;
+	}
+
 	if (!status) {
 		status = xlnx_hdmi_ddcwrite_field(hdmi,
-						  HDMI_TX_SCDC_FIELD_FLT_UPDATE,
-						  1);
+						HDMI_TX_SCDC_FIELD_FLT_UPDATE, 1);
 		if (!status) {
 			hdmi->stream.frl_config.timer_cnt = 0;
 			hdmi->stream.frl_config.frl_train_states =
 				HDMI_TX_FRLSTATE_LTS_3_ARM;
-			xlnx_hdmi_frl_execute(hdmi);
-			return status;
+			xlnx_hdmi_frl_config(hdmi);
 		}
+	} else {
+		hdmi->stream.frl_config.timer_cnt = 0;
+		hdmi->stream.frl_config.frl_train_states = HDMI_TX_FRLSTATE_LTS_L;
+		xlnx_hdmi_set_frl_timer(hdmi, TIMEOUT_10US);
 	}
 
-	hdmi->stream.frl_config.timer_cnt = 0;
-	hdmi->stream.frl_config.frl_train_states = HDMI_TX_FRLSTATE_LTS_L;
-	xlnx_hdmi_set_frl_timer(hdmi, TIMEOUT_10US);
 	xlnx_hdmi_frl_execute(hdmi);
 
 	return status;
@@ -1919,9 +2480,11 @@ static int xlnx_hdmi_exec_frl_state_ltsp(struct xlnx_hdmi *hdmi)
 			status = xlnx_hdmi_ddcwrite_field(hdmi,
 							  HDMI_TX_SCDC_FIELD_FRL_START,
 							  1);
-			if (!status)
+			if (!status) {
 				hdmi->stream.frl_config.frl_train_states =
 					HDMI_TX_FRLSTATE_LTS_P_FRL_RDY;
+				hdmi->wait_for_streamup = 1;
+			}
 		}
 	}
 
@@ -1999,12 +2562,11 @@ static int xlnx_hdmi_exec_frl_state(struct xlnx_hdmi *hdmi)
 /**
  * xlnx_hdmi_start_frl_train - starts the Fixed Rate Link Training.
  * @hdmi: pointer to the HDMI Tx core instance.
- * @frl_rate: frl rate to be trained
  *
  * Returns: 0 on success, 1 on failure.
  */
 static int
-xlnx_hdmi_start_frl_train(struct xlnx_hdmi *hdmi, u32 frl_rate)
+xlnx_hdmi_start_frl_train(struct xlnx_hdmi *hdmi)
 {
 	int status;
 
@@ -2027,8 +2589,6 @@ xlnx_hdmi_start_frl_train(struct xlnx_hdmi *hdmi, u32 frl_rate)
  */
 static void xlnx_hdmi_piointr_handler(struct xlnx_hdmi *hdmi)
 {
-	union phy_configure_opts phy_cfg = {0};
-	int ret, i;
 	u32 event, data;
 
 	/* Read PIO IN Event register */
@@ -2050,51 +2610,13 @@ static void xlnx_hdmi_piointr_handler(struct xlnx_hdmi *hdmi)
 		if (data & HDMI_TX_PIO_IN_HPD_CONNECT) {
 			hdmi->cable_connected = 1;
 			hdmi->connector.status = connector_status_connected;
-			xlnx_hdmi_ddc_disable(hdmi);
-
-			phy_cfg.hdmi.ibufds = 1;
-			phy_cfg.hdmi.ibufds_en = true;
-			for (i = 0; i < HDMI_MAX_LANES; i++) {
-				ret = phy_configure(hdmi->phy[i], &phy_cfg);
-				if (ret) {
-					dev_err(hdmi->dev, "phy_cfg: Ibufds err\n");
-					return;
-				}
-			}
-
-			phy_cfg.hdmi.config_hdmi20 = 1;
-			for (i = 0; i < HDMI_MAX_LANES; i++) {
-				ret = phy_configure(hdmi->phy[i], &phy_cfg);
-				if (ret) {
-					dev_err(hdmi->dev, "phy_cfg: hdmi20 err\n");
-					return;
-				}
-			}
-
-			phy_cfg.hdmi.clkout1_obuftds = 1;
-			phy_cfg.hdmi.clkout1_obuftds_en = false;
-			for (i = 0; i < HDMI_MAX_LANES; i++) {
-				ret = phy_configure(hdmi->phy[i], &phy_cfg);
-				if (ret) {
-					dev_err(hdmi->dev, "phy_cfg:obuftds_en err\n");
-					return;
-				}
-			}
 		} else {
 			hdmi->cable_connected = 0;
 			hdmi->connector.status = connector_status_disconnected;
 			dev_info(hdmi->dev, "stream is not connected\n");
-			phy_cfg.hdmi.clkout1_obuftds = 1;
-			phy_cfg.hdmi.clkout1_obuftds_en = false;
-			for (i = 0; i < HDMI_MAX_LANES; i++) {
-				ret = phy_configure(hdmi->phy[i], &phy_cfg);
-				if (ret) {
-					dev_err(hdmi->dev, "phy_cfg:obuftds_dis err\n");
-					return;
-				}
-			}
+			xlnx_hdmi_streamdown_callback(hdmi);
 		}
-
+		xlnx_hdmi_connect_callback(hdmi);
 		if (hdmi->connector.dev)
 			drm_sysfs_hotplug_event(hdmi->connector.dev);
 		else
@@ -2105,10 +2627,21 @@ static void xlnx_hdmi_piointr_handler(struct xlnx_hdmi *hdmi)
 	if (event & HDMI_TX_PIO_IN_BRIDGE_LOCKED) {
 		dev_dbg(hdmi->dev, "PIO IN status = 0x%x\n",
 			xlnx_hdmi_readl(hdmi, HDMI_TX_PIO_IN));
-		if (data & HDMI_TX_PIO_IN_BRIDGE_LOCKED)
+		if (data & HDMI_TX_PIO_IN_BRIDGE_LOCKED) {
 			dev_dbg(hdmi->dev, "Bridge locked\n");
-		else
+		} else {
 			dev_dbg(hdmi->dev, "Bridge unlocked\n");
+			/* Clear interrupt and FRL */
+			xlnx_hdmi_set_frl_timer(hdmi, 0);
+			xlnx_hdmi_frl_reset_assert(hdmi);
+			xlnx_hdmi_frl_reset_deassert(hdmi);
+			xlnx_hdmi_frl_mode_disable(hdmi);
+			hdmi->stream.is_frl = 0;
+			xlnx_hdmi_ddcwrite_field(hdmi,
+						 HDMI_TX_SCDC_FIELD_FLT_UPDATE,
+						 1);
+			xlnx_hdmi_piointr_clear(hdmi);
+		}
 	}
 
 	/* Bridge Overflow event has occurred */
@@ -2119,46 +2652,28 @@ static void xlnx_hdmi_piointr_handler(struct xlnx_hdmi *hdmi)
 	if (event & HDMI_TX_PIO_IN_BRIDGE_UFLOW)
 		dev_err_ratelimited(hdmi->dev, "Underflow interrupt\n");
 
+	/* vsync event has occurred */
+	if (event & HDMI_TX_PIO_IN_VS) {
+		dev_dbg_ratelimited(hdmi->dev, "Vsync interrupt\n");
+		xlnx_hdmi_vsync_event_handler(hdmi);
+	}
 	/* Link ready event has occurred */
 	if (event & HDMI_TX_PIO_IN_LNK_RDY) {
 		/* Check the link status */
 		if (data & HDMI_TX_PIO_IN_LNK_RDY) {
-			hdmi->stream.state = HDMI_TX_STATE_STREAM_UP;
-			if (hdmi->stream.frl_config.frl_train_states ==
-			    HDMI_TX_FRLSTATE_LTS_3_ARM) {
-				/* Execute state machine */
-				xlnx_hdmi_exec_frl_state(hdmi);
-			}
-			if (!hdmi->stream.is_frl) {
-				xlnx_hdmi_aux_enable(hdmi);
-				xlnx_hdmi_auxintr_enable(hdmi);
-
-				phy_cfg.hdmi.clkout1_obuftds = 1;
-				phy_cfg.hdmi.clkout1_obuftds_en = true;
-				for (i = 0; i < HDMI_MAX_LANES; i++) {
-					ret = phy_configure(hdmi->phy[i],
-							    &phy_cfg);
-					if (ret) {
-						dev_err(hdmi->dev, "phy_cfg: 10bufds_en err\n");
-						return;
-					}
+			if (hdmi->stream.is_frl) {
+				hdmi->stream.state = HDMI_TX_STATE_STREAM_UP;
+				if (hdmi->stream.frl_config.frl_train_states ==
+				    HDMI_TX_FRLSTATE_LTS_3_ARM) {
+					/* Execute state machine */
+					xlnx_hdmi_exec_frl_state(hdmi);
 				}
-				xlnx_hdmi_set_samplerate(hdmi, 1);
-
-				/* release vid_in bridge resets */
-				xlnx_hdmi_ext_sysrst_deassert(hdmi);
-				xlnx_hdmi_ext_vrst_deassert(hdmi);
-				/* release tx core resets */
-				xlnx_hdmi_int_lrst_deassert(hdmi);
-				xlnx_hdmi_int_vrst_deassert(hdmi);
-
-				hdmi->hdmi_stream_up = 1;
-
-				xlnx_pioout_bridge_yuv_clr(hdmi);
-				xlnx_pioout_bridge_pixel_clr(hdmi);
-				xlnx_hdmi_stream_start(hdmi);
-				xlnx_hdmi_clkratio(hdmi);
+			} else {
+				xlnx_hdmi_streamup_callback(hdmi);
+				hdmi->wait_for_streamup = 1;
 			}
+			xlnx_hdmi_aux_enable(hdmi);
+			xlnx_hdmi_auxintr_enable(hdmi);
 		} else {
 			/* Set stream status to down */
 			hdmi->stream.state = HDMI_TX_STATE_STREAM_DOWN;
@@ -2199,7 +2714,6 @@ static irqreturn_t hdmitx_irq_handler(int irq, void *dev_id)
 	/* read status registers */
 	hdmi->intr_status = xlnx_hdmi_readl(hdmi, HDMI_TX_PIO_STA);
 	hdmi->intr_status &= HDMI_TX_PIO_STA_IRQ;
-
 	if (hdmi->stream.is_frl) {
 		hdmi->frl_status = xlnx_hdmi_readl(hdmi, HDMI_TX_FRL_STA);
 		hdmi->frl_status &= HDMI_TX_FRL_STA_IRQ;
@@ -2285,6 +2799,48 @@ static void xlnx_hdmi_connector_destroy(struct drm_connector *connector)
 	connector->dev = NULL;
 }
 
+static int xlnx_hdmi_set_property(struct drm_connector *connector,
+				  struct drm_connector_state *state,
+				  struct drm_property *property,
+				  uint64_t val)
+{
+	struct xlnx_hdmi *hdmi = connector_to_hdmi(connector);
+
+	if (property == hdmi->height_out)
+		hdmi->height_out_prop_val = (u32)val;
+	else if (property == hdmi->width_out)
+		hdmi->width_out_prop_val = (u32)val;
+	else if (property == hdmi->in_fmt)
+		hdmi->in_fmt_prop_val = (u32)val;
+	else if (property == hdmi->out_fmt)
+		hdmi->out_fmt_prop_val = (u32)val;
+	else
+		return -EINVAL;
+
+	return 0;
+}
+
+static int xlnx_hdmi_get_property(struct drm_connector *connector,
+				  const struct drm_connector_state *state,
+				  struct drm_property *property,
+				  uint64_t *val)
+{
+	struct xlnx_hdmi *hdmi = connector_to_hdmi(connector);
+
+	if (property == hdmi->height_out)
+		*val = hdmi->height_out_prop_val;
+	else if (property == hdmi->width_out)
+		*val = hdmi->width_out_prop_val;
+	else if (property == hdmi->in_fmt)
+		*val = hdmi->in_fmt_prop_val;
+	else if (property == hdmi->out_fmt)
+		*val = hdmi->out_fmt_prop_val;
+	else
+		return -EINVAL;
+
+	return 0;
+}
+
 static const struct drm_connector_funcs xlnx_hdmi_connector_funcs = {
 	.dpms			= drm_helper_connector_dpms,
 	.detect			= xlnx_hdmi_connector_detect,
@@ -2293,6 +2849,8 @@ static const struct drm_connector_funcs xlnx_hdmi_connector_funcs = {
 	.atomic_duplicate_state	= drm_atomic_helper_connector_duplicate_state,
 	.atomic_destroy_state	= drm_atomic_helper_connector_destroy_state,
 	.reset			= drm_atomic_helper_connector_reset,
+	.atomic_set_property	= xlnx_hdmi_set_property,
+	.atomic_get_property	= xlnx_hdmi_get_property,
 };
 
 /* DRM connector helper functions */
@@ -2368,11 +2926,28 @@ xlnx_hdmi_get_edid_block(void *data, u8 *buf, unsigned int block,
 	}
 
 	memcpy(buf, buffer + block * 128, len);
-	if (buffer[HDMI_TX_DDC_EDID_SINK_BW] >> HDMI_TX_DDC_EDID_BW_SHIFT)
-		hdmi->stream.is_frl = 1;
 
 	kfree(buffer);
 	return 0;
+}
+
+/**
+ * xlnx_hdmi_set_frl_tmds_mode - Function sets the supported mode (FRL/TMDS)
+ * by the connectd sink device. Also gets the max_frl_rate supportd by sink.
+ *
+ * @connector: pointer to drm connector instance
+ */
+static void
+xlnx_hdmi_set_frl_tmds_mode(struct drm_connector *connector)
+{
+	struct xlnx_hdmi *hdmi = connector_to_hdmi(connector);
+
+	if (connector->display_info.hdmi.max_lanes != 0 &&
+	    connector->display_info.hdmi.max_frl_rate_per_lane != 0) {
+		hdmi->stream.is_frl = 1;
+	} else {
+		hdmi->stream.is_frl = 0;
+	}
 }
 
 static int xlnx_hdmi_connector_get_modes(struct drm_connector *connector)
@@ -2385,6 +2960,9 @@ static int xlnx_hdmi_connector_get_modes(struct drm_connector *connector)
 	hdmi_mutex_lock(&hdmi->hdmi_mutex);
 
 	edid = drm_do_get_edid(connector, xlnx_hdmi_get_edid_block, hdmi);
+
+	/* Set HDMI FRL or TMDS Mode */
+	xlnx_hdmi_set_frl_tmds_mode(connector);
 
 	hdmi_mutex_unlock(&hdmi->hdmi_mutex);
 	if (!edid) {
@@ -2443,8 +3021,12 @@ static void xlnx_hdmi_encoder_enable(struct drm_encoder *encoder)
 	struct xlnx_hdmi_config *config = &hdmi->config;
 
 	xlnx_hdmi_encoder_dpms(encoder, DRM_MODE_DPMS_ON);
-	if (!config->vid_interface)
-		xlnx_hdmi_vtc_enable(hdmi);
+	if (xlnx_hdmi_is_lnk_vid_rdy(hdmi)) {
+		if (!config->vid_interface)
+			xlnx_hdmi_vtc_enable(hdmi);
+	} else {
+		dev_err(hdmi->dev, "No video/link clock! failed to enable vtc\n");
+	}
 
 	xlnx_hdmi_ext_sysrst_deassert(hdmi);
 }
@@ -2454,12 +3036,19 @@ static void xlnx_hdmi_encoder_disable(struct drm_encoder *encoder)
 	struct xlnx_hdmi *hdmi = encoder_to_hdmi(encoder);
 	struct xlnx_hdmi_config *config = &hdmi->config;
 
+	if (hdmi->bridge)
+		xlnx_bridge_disable(hdmi->bridge);
+
 	xlnx_hdmi_encoder_dpms(encoder, DRM_MODE_DPMS_OFF);
 
 	/* Disable the EXT VRST which actually starts the bridge */
 	xlnx_hdmi_ext_sysrst_assert(hdmi);
-	if (!config->vid_interface)
-		xlnx_hdmi_vtc_disable(hdmi);
+	if (xlnx_hdmi_is_lnk_vid_rdy(hdmi)) {
+		if (!config->vid_interface)
+			xlnx_hdmi_vtc_disable(hdmi);
+	} else {
+		dev_err(hdmi->dev, "No video/link clock! failed to disable vtc\n");
+	}
 }
 
 /**
@@ -2480,6 +3069,7 @@ color_formats xlnx_hdmi_find_media_bus(struct xlnx_hdmi *hdmi,
 	case DRM_FORMAT_RGB888:
 	case DRM_FORMAT_ARGB8888:
 	case DRM_FORMAT_ABGR8888:
+	case MEDIA_BUS_FMT_RGB888_1X24:
 		hdmi->xvidc_colordepth = HDMI_TX_BPC_8;
 		return HDMI_TX_CSF_RGB;
 	case DRM_FORMAT_XBGR2101010:
@@ -2488,6 +3078,7 @@ color_formats xlnx_hdmi_find_media_bus(struct xlnx_hdmi *hdmi,
 	case DRM_FORMAT_VUY888:
 	case DRM_FORMAT_XVUY8888:
 	case DRM_FORMAT_Y8:
+	case MEDIA_BUS_FMT_VUY8_1X24:
 		hdmi->xvidc_colordepth = HDMI_TX_BPC_8;
 		return HDMI_TX_CSF_YCRCB_444;
 	case DRM_FORMAT_XVUY2101010:
@@ -2497,12 +3088,14 @@ color_formats xlnx_hdmi_find_media_bus(struct xlnx_hdmi *hdmi,
 	case DRM_FORMAT_YUYV:
 	case DRM_FORMAT_UYVY:
 	case DRM_FORMAT_NV16:
+	case MEDIA_BUS_FMT_UYVY8_1X16:
 		hdmi->xvidc_colordepth = HDMI_TX_BPC_8;
 		return HDMI_TX_CSF_YCRCB_422;
 	case DRM_FORMAT_XV20:
 		hdmi->xvidc_colordepth = HDMI_TX_BPC_10;
 		return HDMI_TX_CSF_YCRCB_422;
 	case DRM_FORMAT_NV12:
+	case MEDIA_BUS_FMT_VYYUYY8_1X24:
 		hdmi->xvidc_colordepth = HDMI_TX_BPC_8;
 		return HDMI_TX_CSF_YCRCB_420;
 	case DRM_FORMAT_XV15:
@@ -2513,6 +3106,33 @@ color_formats xlnx_hdmi_find_media_bus(struct xlnx_hdmi *hdmi,
 		hdmi->xvidc_colordepth = HDMI_TX_BPC_8;
 		return HDMI_TX_CSF_RGB;
 	}
+}
+
+static u64 xlnx_hdmi_get_tmdsclk(struct xlnx_hdmi *hdmi, struct drm_display_mode *adjusted_mode)
+{
+	u64 tmdsclk;
+
+	tmdsclk = adjusted_mode->clock * 1000;
+	if (hdmi->xvidc_colorfmt == HDMI_TX_CSF_YCRCB_420)
+		tmdsclk = tmdsclk >> 1;
+
+	if (hdmi->xvidc_colorfmt != HDMI_TX_CSF_YCRCB_422) {
+		switch (hdmi->config.bpc) {
+		case HDMI_TX_BPC_10:
+			tmdsclk = (tmdsclk * 5) >> 2;
+			break;
+		case HDMI_TX_BPC_12:
+			tmdsclk = (tmdsclk * 3) >> 1;
+			break;
+		case HDMI_TX_BPC_16:
+			tmdsclk = tmdsclk << 1;
+			break;
+		default:
+			break;
+		}
+	}
+
+	return tmdsclk;
 }
 
 /**
@@ -2536,9 +3156,12 @@ xlnx_hdmi_encoder_atomic_mode_set(struct drm_encoder *encoder,
 	struct drm_display_mode *mode = &crtc_state->mode;
 	struct drm_display_mode *adjusted_mode = &crtc_state->adjusted_mode;
 	union phy_configure_opts phy_cfg = {0};
-	int ret, i;
-	u32 drm_fourcc, lnk_clk, vid_clk;
+	int ret;
+	int source_max_frl_bw, sink_max_frl_bw, max_frl_bw;
+	u32 drm_fourcc, pixelrate = 0;
+	u64 lnk_clk = 0, vid_clk = 0;
 
+	drm_mode_copy(&hdmi->saved_adjusted_mode, &crtc_state->adjusted_mode);
 	dev_dbg(hdmi->dev, "mode->clock = %d\n", mode->clock * 1000);
 	dev_dbg(hdmi->dev, "mode->crtc_clock = %d\n", mode->crtc_clock * 1000);
 	dev_dbg(hdmi->dev, "mode->pvsync = %d\n",
@@ -2557,36 +3180,85 @@ xlnx_hdmi_encoder_atomic_mode_set(struct drm_encoder *encoder,
 	dev_dbg(hdmi->dev, "mode->flags = %d interlace = %d\n", mode->flags,
 		!!(mode->flags & DRM_MODE_FLAG_INTERLACE));
 
+	source_max_frl_bw = hdmi->config.max_frl_rate;
+	sink_max_frl_bw = xlnx_hdmi_sink_max_frl(hdmi);
+	max_frl_bw = min(sink_max_frl_bw, source_max_frl_bw);
+	if (max_frl_bw <= 0) {
+		hdmi->stream.is_frl = 0;
+		dev_dbg(hdmi->dev, "Connected sink supports TMDS mode\n");
+	} else {
+		dev_dbg(hdmi->dev, "Connected sink supports FRL mode\n");
+		hdmi->stream.is_frl = 1;
+	}
+
 	if (hdmi->stream.is_frl) {
 		xlnx_hdmi_frl_reset_deassert(hdmi);
 		xlnx_hdmi_frl_intr_enable(hdmi);
 		xlnx_hdmi_frl_execute(hdmi);
-		hdmi->stream.sink_max_lanes =
-			connector->display_info.hdmi.max_lanes;
-		hdmi->stream.sink_max_linerate =
-			connector->display_info.hdmi.max_frl_rate_per_lane;
+
+		hdmi->stream.frl_config.lanes = rate_table[max_frl_bw].lanes;
+		hdmi->stream.frl_config.linerate = rate_table[max_frl_bw].linerate;
 	} else {
 		xlnx_hdmi_frl_ext_vidsrc(hdmi);
 		xlnx_hdmi_frl_sleep(hdmi);
 	}
 
 	drm_fourcc = encoder->crtc->primary->state->fb->format->format;
+
+	if (hdmi->bridge) {
+		/*
+		 * TODO: Add a check for valid values of width_out,
+		 * height_out and out_fmt values based on sink
+		 * capabilities.
+		 */
+		xlnx_bridge_set_input(hdmi->bridge, adjusted_mode->hdisplay,
+				      adjusted_mode->vdisplay,
+				      hdmi->in_fmt_prop_val);
+		xlnx_bridge_set_output(hdmi->bridge, hdmi->width_out_prop_val,
+				       hdmi->height_out_prop_val,
+				       hdmi->out_fmt_prop_val);
+		xlnx_bridge_enable(hdmi->bridge);
+
+		drm_fourcc = hdmi->out_fmt_prop_val;
+		adjusted_mode = drm_mode_find_cea(connector->dev,
+						  hdmi->width_out_prop_val,
+						  hdmi->height_out_prop_val,
+						  drm_mode_vrefresh(adjusted_mode),
+						  adjusted_mode->flags & DRM_MODE_FLAG_INTERLACE);
+		if (!adjusted_mode) {
+			dev_err(hdmi->dev, "Invalid CEA mode\n");
+			return;
+		}
+	}
+
 	hdmi->xvidc_colorfmt = xlnx_hdmi_find_media_bus(hdmi, drm_fourcc);
 	dev_dbg(hdmi->dev, "xvidc_colorfmt = %d\n", hdmi->xvidc_colorfmt);
 	dev_dbg(hdmi->dev, "xvidc_colordepth = %d\n", hdmi->xvidc_colordepth);
 
-	hdmi->tmds_clk = adjusted_mode->clock * 1000;
-	dev_dbg(hdmi->dev, "tmds_clk = %u\n", hdmi->tmds_clk);
+	hdmi->tmds_clk = xlnx_hdmi_get_tmdsclk(hdmi, adjusted_mode);
+	dev_dbg(hdmi->dev, "tmds_clk = %llu\n", hdmi->tmds_clk);
+
+	if (connector->display_info.is_hdmi)
+		xlnx_hdmi_send_infoframes(hdmi);
 
 	if (hdmi->stream.is_frl) {
 		phy_cfg.hdmi.clkout1_obuftds = 1;
 		phy_cfg.hdmi.clkout1_obuftds_en = false;
-		for (i = 0; i < HDMI_MAX_LANES; i++) {
-			ret = phy_configure(hdmi->phy[i], &phy_cfg);
-			if (ret) {
-				dev_err(hdmi->dev, "phy_cfg:10bufds_en err\n");
-				return;
-			}
+		ret = xlnx_hdmi_phy_configure(hdmi, &phy_cfg);
+		if (ret) {
+			dev_err(hdmi->dev, "phy_cfg:10bufds_en err %d\n", ret);
+			return;
+		}
+
+		ret = xlnx_hdmi_start_frl_train(hdmi);
+		if (ret) {
+			dev_err(hdmi->dev, "FRL training is failed.switch to TMDS mode \r\n");
+			xlnx_hdmi_set_hdmi_mode(hdmi);
+			hdmi->stream.is_hdmi = true;
+			hdmi->stream.is_frl = false;
+			xlnx_hdmi_auxintr_enable(hdmi);
+		} else {
+			dev_dbg(hdmi->dev, "FRL training passed !!\n");
 		}
 	}
 
@@ -2601,43 +3273,34 @@ xlnx_hdmi_encoder_atomic_mode_set(struct drm_encoder *encoder,
 
 		/* Assert HDMI TXCore resets */
 		xlnx_hdmi_int_lrst_assert(hdmi);
-		xlnx_hdmi_int_vrst_assert(hdmi);
 
 		phy_cfg.hdmi.tx_params = 1;
 		phy_cfg.hdmi.ppc = config->ppc;
 		phy_cfg.hdmi.bpc = config->bpc;
 		phy_cfg.hdmi.fmt = hdmi->xvidc_colorfmt;
 		phy_cfg.hdmi.tx_tmdsclk = hdmi->tmds_clk;
-		for (i = 0; i < HDMI_MAX_LANES; i++) {
-			ret = phy_configure(hdmi->phy[i], &phy_cfg);
-			if (ret) {
-				dev_err(hdmi->dev, "phy_config: set txparams error %d\n", ret);
-				return;
-			}
+		ret = xlnx_hdmi_phy_configure(hdmi, &phy_cfg);
+		if (ret) {
+			dev_err(hdmi->dev, "phy_config: set txparams error %d\n", ret);
+			return;
 		}
 	} else {
-		lnk_clk = adjusted_mode->clock / config->ppc;
-		vid_clk = lnk_clk;
+		if (hdmi->xvidc_colorfmt == HDMI_TX_CSF_YCRCB_422) {
+			vid_clk = (hdmi->tmds_clk / config->ppc) / 1000;
+			lnk_clk = vid_clk;
+		} else {
+			pixelrate = ((hdmi->tmds_clk * 8) / config->bpc) / 1000;
+			vid_clk = (pixelrate / config->ppc);
+			lnk_clk = (vid_clk *  config->bpc) / 8;
+		}
 
 		xlnx_set_frl_link_clk(hdmi, lnk_clk);
 		xlnx_set_frl_vid_clk(hdmi, vid_clk);
 
-		xlnx_hdmi_aux_enable(hdmi);
-		xlnx_hdmi_start_frl_train(hdmi, hdmi->config.max_frl_rate);
-		xlnx_hdmi_auxintr_enable(hdmi);
-		xlnx_hdmi_set_samplerate(hdmi, 1);
-
-		/* release vid_in bridge resets */
-		xlnx_hdmi_ext_sysrst_deassert(hdmi);
-		xlnx_hdmi_ext_vrst_deassert(hdmi);
-		/* release tx cor resets */
-		xlnx_hdmi_int_lrst_deassert(hdmi);
-		xlnx_hdmi_int_vrst_deassert(hdmi);
-		xlnx_pioout_bridge_yuv_clr(hdmi);
-		xlnx_pioout_bridge_pixel_clr(hdmi);
+		xlnx_hdmi_streamup_callback(hdmi);
 	}
 
-	dev_dbg(hdmi->dev, "mode->clock = %u Hz\n", adjusted_mode->clock);
+	dev_dbg(hdmi->dev, "tmds_clk = %llu Hz\n", hdmi->tmds_clk);
 
 	hdmi->wait_for_streamup = 0;
 	wait_event_timeout(hdmi->wait_event, hdmi->wait_for_streamup,
@@ -2645,8 +3308,7 @@ xlnx_hdmi_encoder_atomic_mode_set(struct drm_encoder *encoder,
 	if (!hdmi->wait_for_streamup)
 		dev_err(hdmi->dev, "wait_for_streamup timeout\n");
 
-	ret = xlnx_hdmi_readl(hdmi, HDMI_TX_PIO_IN);
-	if (ret & HDMI_TX_PIO_IN_VID_RDY) {
+	if (xlnx_hdmi_is_lnk_vid_rdy(hdmi)) {
 		dev_dbg(hdmi->dev, "TX: Video ready interrupt received\n");
 		if (!config->vid_interface)
 			xlnx_hdmi_vtc_set_timing(hdmi, adjusted_mode);
@@ -2654,9 +3316,16 @@ xlnx_hdmi_encoder_atomic_mode_set(struct drm_encoder *encoder,
 			xlnx_hdmi_vtc_writel(hdmi, HDMI_TX_VTC_CTL,
 					     HDMI_TX_VTC_CTL_GE);
 	} else {
-		dev_dbg(hdmi->dev, "video ready interrupt not received\n");
+		dev_dbg(hdmi->dev, "Video/Link clock is not ready\n");
 	}
-
+	if (hdmi->config.hdcp2x_enable || hdmi->config.hdcp1x_enable) {
+		ret = xlnx_start_hdcp_engine(&hdmi->txhdcp,
+					     HDMI_MAX_LANES);
+		if (ret < 0) {
+			dev_err(hdmi->dev, "Failed to Start HDCP engine\n");
+			return;
+		}
+	}
 	if (hdmi->stream.is_frl)
 		xlnx_hdmi_set_frl_active(hdmi,
 					 HDMI_TX_FRL_ACTIVE_MODE_FULL_STREAM);
@@ -2675,6 +3344,42 @@ drm_encoder_helper_funcs xlnx_hdmi_encoder_helper_funcs = {
 	.disable = xlnx_hdmi_encoder_disable,
 	.atomic_mode_set = xlnx_hdmi_encoder_atomic_mode_set,
 };
+
+static void
+xlnx_hdmi_create_connector_property(struct drm_connector *connector)
+{
+	struct drm_device *dev = connector->dev;
+	struct xlnx_hdmi *hdmi = connector_to_hdmi(connector);
+
+	hdmi->height_out = drm_property_create_range(dev, 0, "height_out",
+						     HDMI_MIN_HEIGHT,
+						     HDMI_MAX_HEIGHT);
+	hdmi->width_out = drm_property_create_range(dev, 0, "width_out",
+						    HDMI_MIN_WIDTH,
+						    HDMI_MAX_WIDTH);
+	hdmi->in_fmt = drm_property_create_range(dev, 0, "in_fmt",
+						 MEDIA_BUS_FMT_RGB888_1X24,
+						 MEDIA_BUS_FMT_VYYUYY8_1X24);
+	hdmi->out_fmt = drm_property_create_range(dev, 0, "out_fmt",
+						  MEDIA_BUS_FMT_RGB888_1X24,
+						  MEDIA_BUS_FMT_VYYUYY8_1X24);
+}
+
+static void
+xlnx_hdmi_attach_connector_property(struct drm_connector *connector)
+{
+	struct xlnx_hdmi *hdmi = connector_to_hdmi(connector);
+	struct drm_mode_object *obj = &connector->base;
+
+	if (hdmi->height_out)
+		drm_object_attach_property(obj, hdmi->height_out, 0);
+	if (hdmi->width_out)
+		drm_object_attach_property(obj, hdmi->width_out, 0);
+	if (hdmi->in_fmt)
+		drm_object_attach_property(obj, hdmi->in_fmt, 0);
+	if (hdmi->out_fmt)
+		drm_object_attach_property(obj, hdmi->out_fmt, 0);
+}
 
 static int xlnx_hdmi_create_connector(struct drm_encoder *encoder)
 {
@@ -2706,6 +3411,9 @@ static int xlnx_hdmi_create_connector(struct drm_encoder *encoder)
 			"Failed to attach connector (ret=%d)\n", ret);
 		return ret;
 	}
+
+	xlnx_hdmi_create_connector_property(connector);
+	xlnx_hdmi_attach_connector_property(connector);
 
 	return 0;
 }
@@ -2739,6 +3447,9 @@ static void xlnx_hdmi_unbind(struct device *dev, struct device *master,
 {
 	struct xlnx_hdmi *hdmi = dev_get_drvdata(dev);
 
+	if (hdmi->bridge)
+		xlnx_bridge_disable(hdmi->bridge);
+
 	xlnx_hdmi_encoder_dpms(&hdmi->encoder, DRM_MODE_DPMS_OFF);
 	drm_encoder_cleanup(&hdmi->encoder);
 	drm_connector_cleanup(&hdmi->connector);
@@ -2748,31 +3459,6 @@ static const struct component_ops xlnx_hdmi_component_ops = {
 	.bind	= xlnx_hdmi_bind,
 	.unbind	= xlnx_hdmi_unbind
 };
-
-/**
- * xlnx_hdmi_reset - Reset the core and bridge
- * @hdmi: HDMI core structure
- *
- * Returns: None
- */
-static void xlnx_hdmi_reset(struct xlnx_hdmi *hdmi)
-{
-	/* hdmi core reset - assert */
-	xlnx_hdmi_int_lrst_assert(hdmi);
-	xlnx_hdmi_int_vrst_assert(hdmi);
-
-	/* vid out bridge reset */
-	xlnx_hdmi_ext_sysrst_assert(hdmi);
-	xlnx_hdmi_ext_vrst_assert(hdmi);
-
-	/* release vid in bridge resets */
-	xlnx_hdmi_ext_sysrst_deassert(hdmi);
-	xlnx_hdmi_ext_vrst_deassert(hdmi);
-
-	/* release hdmi tx core resets */
-	xlnx_hdmi_int_lrst_deassert(hdmi);
-	xlnx_hdmi_int_vrst_deassert(hdmi);
-}
 
 /**
  * xlnx_hdmi_exit_phy - Exit the phy
@@ -2802,7 +3488,7 @@ static void xlnx_hdmi_exit_phy(struct xlnx_hdmi *hdmi)
 static int xlnx_hdmi_initialize(struct xlnx_hdmi *hdmi)
 {
 	union phy_configure_opts phy_cfg = {0};
-	int ret, i;
+	int ret;
 	unsigned long val, clkrate;
 
 	/* mutex that protects against concurrent access */
@@ -2864,12 +3550,10 @@ static int xlnx_hdmi_initialize(struct xlnx_hdmi *hdmi)
 	xlnx_hdmi_reset(hdmi);
 
 	phy_cfg.hdmi.config_hdmi20 = 1;
-	for (i = 0; i < HDMI_MAX_LANES; i++) {
-		ret = phy_configure(hdmi->phy[i], &phy_cfg);
-		if (ret) {
-			dev_err(hdmi->dev, "phy_cfg: hdmi20 err\n");
-			return ret;
-		}
+	ret = xlnx_hdmi_phy_configure(hdmi, &phy_cfg);
+	if (ret) {
+		dev_err(hdmi->dev, "phy_cfg: hdmi20 err %d\n", ret);
+		return ret;
 	}
 
 	/* Enable Interrupts */
@@ -2901,6 +3585,9 @@ static int xlnx_hdmi_parse_of(struct xlnx_hdmi *hdmi)
 	}
 	config->bpc = bpc;
 
+	config->hdcp1x_enable = of_property_read_bool(node, "xlnx,include-hdcp-1-4");
+	config->hdcp2x_enable = of_property_read_bool(node, "xlnx,include-hdcp-2-2");
+
 	ret = of_property_read_u32(node, "xlnx,vid-interface", &vid);
 	if (ret || (vid != HDMI_TX_AXI_STREAM && vid != HDMI_TX_NATIVE &&
 		    vid != HDMI_TX_NATIVE_IDE)) {
@@ -2916,6 +3603,280 @@ static int xlnx_hdmi_parse_of(struct xlnx_hdmi *hdmi)
 	}
 	config->max_frl_rate = frl_rate;
 
+	if (of_device_is_compatible(node, "xlnx,v-hdmi-txss1-1.1")) {
+		config->htiming_div_fact = config->ppc;
+	} else {
+		/* VTC core updated to support arbitrary resolutions */
+		config->htiming_div_fact = 1;
+		/* Remapper in subsystem will generate 4 ppc */
+		config->ppc = HDMI_TX_PPC_4;
+	}
+
+	return 0;
+}
+
+/**
+ * xlnx_hdmi_hdcp_exit - hdcp module de-initialization
+ * @hdmi: HDMI IP core structure
+ *
+ * Return: 0 on success, or the status from called functions
+ */
+static int xlnx_hdmi_hdcp_exit(struct xlnx_hdmi *hdmi)
+{
+	struct xlnx_hdcptx *xhdcp = &hdmi->txhdcp;
+	int ret;
+
+	if (xhdcp->hdcp2xenable) {
+		ret = xlnx_hdmi_hdcp_reset(hdmi);
+		if (ret < 0) {
+			dev_err(hdmi->dev, "failed to exit HDCP IP module");
+			return ret;
+		}
+	}
+	xlnx_hdcp_tx_timer_exit(xhdcp);
+	xlnx_hdcp_tx_exit(xhdcp);
+
+	return 0;
+}
+
+/**
+ * xlnx_hdmi_hdcp_cp_irq_func - Checks for HDCP information
+ * whenever CP Irq is detected
+ * @work: work structure
+ *
+ * This function checks for HDCP authentication information via rxstatus register
+ * as soon as cp irq interrupt triggers.
+ */
+static void xlnx_hdmi_hdcp_cp_irq_func(struct work_struct *work)
+{
+	struct xlnx_hdmi *hdmi;
+	struct xlnx_hdcptx *xhdcp;
+
+	hdmi = container_of(work, struct xlnx_hdmi, hdcp_cp_irq_work.work);
+	xhdcp = &hdmi->txhdcp;
+	xlnx_hdcp_tx_process_cp_irq(xhdcp);
+}
+
+/**
+ * xlnx_hdmi_hdcp_status_update - hdcp status notification
+ * @ref: callback reference pointer
+ * @notification: hdcp notification
+ */
+static void xlnx_hdmi_hdcp_status_update(void *ref, u32 notification)
+{
+	struct xlnx_hdmi *hdmi = (struct xlnx_hdmi *)ref;
+
+	switch (notification) {
+	case XHDCPTX_INCOMPATIBLE_RX:
+		dev_dbg(hdmi->dev, "HDCP Tx compatible receiver is not found\n");
+		break;
+	case XHDCPTX_AUTHENTICATION_BUSY:
+		dev_dbg(hdmi->dev, "HDCP Tx Authentication Busy\n");
+		break;
+	case XHDCPTX_AUTHENTICATED:
+		dev_dbg(hdmi->dev, "HDCP Tx Authenticated\n");
+		break;
+	case XHDCPTX_REAUTHENTICATE_REQUESTED:
+		dev_dbg(hdmi->dev, "HDCP Tx Re-authentication Request received\n");
+		break;
+	case XHDCPTX_DEVICE_IS_REVOKED:
+		dev_dbg(hdmi->dev, "HDCP Tx , a device in the hdcp chain is revoked\n");
+		break;
+	case XHDCPTX_NO_SRM_LOADED:
+		dev_dbg(hdmi->dev, "HDCP Tx , no valid srm is loaded\n");
+		break;
+	case XHDCPTX_UNAUTHENTICATED:
+		dev_dbg(hdmi->dev, "HDCP Tx Unauthenticated\n");
+		break;
+	default:
+		dev_dbg(hdmi->dev, "Error, HDCP is not initialized\n");
+		break;
+	}
+}
+
+/**
+ * xlnx_hdmi_hdcp_irq_handler - HDCP protocol message interrupt handler
+ * @irq: IRQ number of the interrupt being handled
+ * @data: Pointer to device structure
+ *
+ * Return: irq handler status
+ */
+static irqreturn_t xlnx_hdmi_hdcp_irq_handler(int irq, void *data)
+{
+	struct xlnx_hdmi *hdmi = (struct xlnx_hdmi *)data;
+	struct xlnx_hdcptx *hdmitxhdcp = &hdmi->txhdcp;
+
+	xlnx_hdcp1x_interrupt_handler(hdmitxhdcp);
+
+	return IRQ_HANDLED;
+}
+
+/**
+ * xlnx_hdmi_timer_irq_handler - hdcp timer interrupt handler
+ * @irq: IRQ number of the interrupt being handled
+ * @data: Pointer to device structure
+ *
+ * Return: irq handler status
+ */
+static irqreturn_t xlnx_hdmi_timer_irq_handler(int irq, void *data)
+{
+	struct xlnx_hdmi *hdmi = (struct xlnx_hdmi *)data;
+	struct xlnx_hdcptx *xhdcp = &hdmi->txhdcp;
+
+	xlnx_hdcp_tmrcntr_interrupt_handler(xhdcp->xhdcptmr);
+
+	return IRQ_HANDLED;
+}
+
+static int xlnx_hdmi_hdcp_ddc_callback_write(void *ref, u32 offset,
+					     void *buf, u32 buf_size)
+{
+	struct xlnx_hdmi *hdmi = (struct xlnx_hdmi *)ref;
+	int ret;
+	bool stop_flag;
+
+	stop_flag = (buf_size > 1) ? true : false;
+
+	ret = xlnx_hdmi_ddcwrite(hdmi, HDMI_HDCP_DDC_BASE_OFFSET, buf_size, (u8 *)buf, stop_flag);
+	if (ret < 0) {
+		dev_err(hdmi->dev, "DDC write failed");
+		return ret;
+	}
+	return buf_size;
+}
+
+static int xlnx_hdmi_hdcp_ddc_callback_read(void *ref, u32 offset,
+					    void *buf, u32 buf_size)
+{
+	struct xlnx_hdmi *hdmi = (struct xlnx_hdmi *)ref;
+	int ret;
+
+	if (!buf_size)
+		return buf_size;
+	ret = xlnx_hdmi_ddc_readreg(hdmi, HDMI_HDCP_DDC_BASE_OFFSET, buf_size, offset, buf);
+	if (ret < 0) {
+		dev_err(hdmi->dev, "DDC read failed");
+		return ret;
+	}
+	return buf_size;
+}
+
+/**
+ * xlnx_hdcp_init - hdcp module initialization
+ * @hdmi: HDMI IP core structure
+ * @pdev: platform structure
+ *
+ * Return: 0 on success, or return the error code from the called functions.
+ */
+static int xlnx_hdcp_init(struct xlnx_hdmi *hdmi,
+			  struct platform_device *pdev)
+{
+	struct xlnx_hdcptx *xhdcp = &hdmi->txhdcp;
+	int ret;
+
+	xhdcp->dev = hdmi->dev;
+	xhdcp->hdcp2xenable = hdmi->config.hdcp2x_enable;
+	xhdcp->hdcp1xenable = hdmi->config.hdcp1x_enable;
+	xhdcp->is_hdcp_initialized = false;
+
+	if (hdmi->config.hdcp2x_enable) {
+		xhdcp->xhdcp2x = xlnx_hdcp_tx_init(&pdev->dev, hdmi, xhdcp,
+						   hdmi->base + HDMI_HDCP2X_OFFSET,
+						   0, XHDCPTX_HDCP_2X,
+						   hdmi->stream.sink_max_lanes,
+						   XHDCP2X_TX_HDMI, hdmi->hdcp1x_keymgmt_base);
+
+		if (IS_ERR(xhdcp->xhdcp2x)) {
+			dev_err(hdmi->dev, "failed to initialize HDCP2X module\n");
+			return PTR_ERR(xhdcp->xhdcp2x);
+		}
+		hdmi->hdcp2x_timer_irq =
+				 platform_get_irq_byname(pdev, "hdcp22timer");
+		if (hdmi->hdcp2x_timer_irq < 0) {
+			dev_err(hdmi->dev, "failed to get HDCP2X timer irq");
+			return -EINVAL;
+		}
+		ret = devm_request_threaded_irq(hdmi->dev, hdmi->hdcp2x_timer_irq, NULL,
+						xlnx_hdmi_timer_irq_handler,
+						IRQF_TRIGGER_HIGH | IRQF_ONESHOT,
+						"hdcp22timer", hdmi);
+		if (ret < 0) {
+			dev_err(hdmi->dev, "failed to register HDCP timer irq");
+			return ret;
+		}
+		xhdcp->xhdcptmr =
+				xlnx_hdcp_timer_init(&pdev->dev,
+						     hdmi->base + HDMI_HDCP2X_OFFSET + 0x10000);
+		if (IS_ERR(xhdcp->xhdcptmr)) {
+			dev_err(hdmi->dev, "failed to initialize HDCP timer\n");
+			return PTR_ERR(xhdcp->xhdcptmr);
+		}
+	}
+	if (hdmi->config.hdcp1x_enable) {
+		xhdcp->xhdcp1x = xlnx_hdcp_tx_init(&pdev->dev, hdmi, xhdcp,
+						   hdmi->base + HDMI_HDCP1X_OFFSET,
+						   0, XHDCPTX_HDCP_1X,
+						   hdmi->stream.sink_max_lanes,
+						   XHDCP2X_TX_HDMI,
+						   hdmi->hdcp1x_keymgmt_base);
+
+		if (IS_ERR(xhdcp->xhdcp1x)) {
+			dev_err(hdmi->dev, "failed to initialize HDCP1X module\n");
+			return PTR_ERR(xhdcp->xhdcp1x);
+		}
+
+		xhdcp->xhdcptmr =
+			xlnx_hdcp_timer_init(&pdev->dev, hdmi->base + HDMI_HDCP_TIMER_OFFSET);
+		if (IS_ERR(xhdcp->xhdcptmr)) {
+			dev_err(hdmi->dev, "failed to initialize HDCP timer\n");
+			return PTR_ERR(xhdcp->xhdcptmr);
+		}
+
+		hdmi->hdcp1x_timer_irq =
+				 platform_get_irq_byname(pdev, "hdcp14timer");
+		if (hdmi->hdcp1x_timer_irq < 0) {
+			dev_err(hdmi->dev, "failed to get HDCP timer irq ");
+			return -EINVAL;
+		}
+
+		ret = devm_request_threaded_irq(hdmi->dev, hdmi->hdcp1x_timer_irq, NULL,
+						xlnx_hdmi_timer_irq_handler,
+						IRQF_TRIGGER_HIGH | IRQF_ONESHOT,
+						"hdcp14timer", hdmi);
+		if (ret < 0) {
+			dev_err(hdmi->dev, "failed to register HDCP timer irq");
+			return ret;
+		}
+
+		hdmi->hdcp_irq =
+				 platform_get_irq_byname(pdev, "hdcp14");
+		if (hdmi->hdcp_irq < 0) {
+			dev_err(hdmi->dev, "failed to get HDCP irq ");
+			return -EINVAL;
+		}
+
+		ret = devm_request_threaded_irq(hdmi->dev, hdmi->hdcp_irq, NULL,
+						xlnx_hdmi_hdcp_irq_handler,
+						IRQF_TRIGGER_HIGH | IRQF_ONESHOT,
+						"hdcp14", hdmi);
+		if (ret < 0) {
+			dev_err(hdmi->dev, "failed to register HDCP interrupt irq");
+			return ret;
+		}
+	}
+	xlnx_hdcp_tx_set_callback(xhdcp, HDMI_HDCP_DPCD_WRITE,
+				  xlnx_hdmi_hdcp_ddc_callback_write);
+
+	xlnx_hdcp_tx_set_callback(xhdcp, HDMI_HDCP_DPCD_READ,
+				  xlnx_hdmi_hdcp_ddc_callback_read);
+
+	xlnx_hdcp_tx_set_callback(xhdcp, HDMI_HDCP_STATUS,
+				  xlnx_hdmi_hdcp_status_update);
+
+	INIT_DELAYED_WORK(&hdmi->hdcp_cp_irq_work, xlnx_hdmi_hdcp_cp_irq_func);
+
+	xhdcp->is_hdcp_initialized = true;
+
 	return 0;
 }
 
@@ -2923,6 +3884,7 @@ static int xlnx_hdmi_probe(struct platform_device *pdev)
 {
 	struct xlnx_hdmi *hdmi;
 	struct resource *res;
+	struct device_node *vpss_node;
 	unsigned int index;
 	int ret, num_clks = ARRAY_SIZE(hdmitx_clks);
 
@@ -2941,6 +3903,16 @@ static int xlnx_hdmi_probe(struct platform_device *pdev)
 	ret = xlnx_hdmi_parse_of(hdmi);
 	if (ret < 0)
 		return ret;
+
+	/* VPSS bridge support */
+	vpss_node = of_parse_phandle(hdmi->dev->of_node, "xlnx,vpss", 0);
+	if (vpss_node) {
+		hdmi->bridge = of_xlnx_bridge_get(vpss_node);
+		if (!hdmi->bridge) {
+			dev_info(hdmi->dev, "Didn't get bridge instance\n");
+			return -EPROBE_DEFER;
+		}
+	}
 
 	ret = clk_bulk_get(&pdev->dev, num_clks, hdmitx_clks);
 	if (ret)
@@ -3004,9 +3976,35 @@ static int xlnx_hdmi_probe(struct platform_device *pdev)
 		dev_err(hdmi->dev, "hdmi initialization failed\n");
 		goto error_phy;
 	}
+	if (hdmi->config.hdcp2x_enable || hdmi->config.hdcp1x_enable) {
+		ret = sysfs_create_group(&hdmi->dev->kobj, &xlnx_hdcp_key_attr_group);
+		if (ret) {
+			dev_err(hdmi->dev, "\nunable to create sysfs group");
+			goto error_phy;
+		}
+	}
+
+	if (hdmi->config.hdcp1x_enable) {
+		hdmi->hdcp1x_keymgmt_base =
+			syscon_regmap_lookup_by_phandle(hdmi->dev->of_node,
+							"xlnx,hdcp1x-keymgmt");
+		if (IS_ERR(hdmi->hdcp1x_keymgmt_base)) {
+			dev_err(hdmi->dev, "couldn't map HDCP1X Keymgmt registers\n");
+			goto error_phy;
+		}
+	}
+
+	if (hdmi->config.hdcp1x_enable || hdmi->config.hdcp2x_enable) {
+		ret = xlnx_hdcp_init(hdmi, pdev);
+		if (ret < 0)
+			goto error_hdcp;
+	}
 
 	return component_add(hdmi->dev, &xlnx_hdmi_component_ops);
 
+error_hdcp:
+	xlnx_hdmi_hdcp_exit(hdmi);
+	sysfs_remove_group(&pdev->dev.kobj, &xlnx_hdcp_key_attr_group);
 error_phy:
 	dev_dbg(hdmi->dev, "probe failed:: error_phy:\n");
 	xlnx_hdmi_exit_phy(hdmi);
@@ -3022,7 +4020,11 @@ static int xlnx_hdmi_remove(struct platform_device *pdev)
 	struct xlnx_hdmi *hdmi = platform_get_drvdata(pdev);
 	int num_clks = ARRAY_SIZE(hdmitx_clks);
 
+	if (hdmi->bridge)
+		xlnx_bridge_disable(hdmi->bridge);
+
 	xlnx_hdmi_exit_phy(hdmi);
+	sysfs_remove_group(&pdev->dev.kobj, &xlnx_hdcp_key_attr_group);
 	component_del(&pdev->dev, &xlnx_hdmi_component_ops);
 	clk_bulk_disable_unprepare(num_clks, hdmitx_clks);
 	clk_bulk_put(num_clks, hdmitx_clks);
@@ -3032,6 +4034,7 @@ static int xlnx_hdmi_remove(struct platform_device *pdev)
 
 static const struct of_device_id xlnx_hdmi_of_match[] = {
 	{ .compatible = "xlnx,v-hdmi-txss1-1.1" },
+	{ .compatible = "xlnx,v-hdmi-txss1-1.2" },
 	{ /* end of table */ },
 };
 
@@ -3050,4 +4053,4 @@ module_platform_driver(xlnx_hdmi_driver);
 
 MODULE_AUTHOR("Venkateshwar Rao G <vgannava@xilinx.com>");
 MODULE_DESCRIPTION("Xilinx DRM KMS HDMI Driver");
-MODULE_LICENSE("GPL v2");
+MODULE_LICENSE("GPL");

@@ -23,7 +23,7 @@
 #include <linux/prefetch.h>
 #include <linux/byteorder/generic.h>
 #include <linux/platform_data/pxa2xx_udc.h>
-#include <linux/of_device.h>
+#include <linux/of.h>
 #include <linux/of_gpio.h>
 
 #include <linux/usb.h>
@@ -215,7 +215,7 @@ static void pxa_init_debugfs(struct pxa_udc *udc)
 
 static void pxa_cleanup_debugfs(struct pxa_udc *udc)
 {
-	debugfs_remove(debugfs_lookup(udc->gadget.name, usb_debug_root));
+	debugfs_lookup_and_remove(udc->gadget.name, usb_debug_root);
 }
 
 #else
@@ -1159,7 +1159,7 @@ static int pxa_ep_dequeue(struct usb_ep *_ep, struct usb_request *_req)
 {
 	struct pxa_ep		*ep;
 	struct udc_usb_ep	*udc_usb_ep;
-	struct pxa27x_request	*req;
+	struct pxa27x_request	*req = NULL, *iter;
 	unsigned long		flags;
 	int			rc = -EINVAL;
 
@@ -1173,11 +1173,12 @@ static int pxa_ep_dequeue(struct usb_ep *_ep, struct usb_request *_req)
 	spin_lock_irqsave(&ep->lock, flags);
 
 	/* make sure it's actually queued on this endpoint */
-	list_for_each_entry(req, &ep->queue, queue) {
-		if (&req->req == _req) {
-			rc = 0;
-			break;
-		}
+	list_for_each_entry(iter, &ep->queue, queue) {
+		if (&iter->req != _req)
+			continue;
+		req = iter;
+		rc = 0;
+		break;
 	}
 
 	spin_unlock_irqrestore(&ep->lock, flags);
@@ -2444,7 +2445,7 @@ err:
  * pxa_udc_remove - removes the udc device driver
  * @_dev: platform device
  */
-static int pxa_udc_remove(struct platform_device *_dev)
+static void pxa_udc_remove(struct platform_device *_dev)
 {
 	struct pxa_udc *udc = platform_get_drvdata(_dev);
 
@@ -2459,8 +2460,6 @@ static int pxa_udc_remove(struct platform_device *_dev)
 	udc->transceiver = NULL;
 	the_controller = NULL;
 	clk_unprepare(udc->clk);
-
-	return 0;
 }
 
 static void pxa_udc_shutdown(struct platform_device *_dev)
@@ -2470,12 +2469,6 @@ static void pxa_udc_shutdown(struct platform_device *_dev)
 	if (udc_readl(udc, UDCCR) & UDCCR_UDE)
 		udc_disable(udc);
 }
-
-#ifdef CONFIG_PXA27x
-extern void pxa27x_clear_otgph(void);
-#else
-#define pxa27x_clear_otgph()   do {} while (0)
-#endif
 
 #ifdef CONFIG_PM
 /**
@@ -2546,7 +2539,7 @@ static struct platform_driver udc_driver = {
 		.of_match_table = of_match_ptr(udc_pxa_dt_ids),
 	},
 	.probe		= pxa_udc_probe,
-	.remove		= pxa_udc_remove,
+	.remove_new	= pxa_udc_remove,
 	.shutdown	= pxa_udc_shutdown,
 #ifdef CONFIG_PM
 	.suspend	= pxa_udc_suspend,

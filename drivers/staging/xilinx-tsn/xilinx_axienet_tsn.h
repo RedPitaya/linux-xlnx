@@ -17,6 +17,7 @@
 #include <linux/phy.h>
 #include <linux/of_platform.h>
 #include <linux/clk.h>
+#include <linux/io-64-nonatomic-lo-hi.h>
 
 /* Packet size info */
 #define XAE_HDR_SIZE			14 /* Size of Ethernet header */
@@ -1092,6 +1093,22 @@ static inline u32 axienet_ior(struct axienet_local *lp, off_t offset)
 	return ioread32(lp->regs + offset);
 }
 
+/**
+ * axienet_ior64 - Memory mapped Axi Ethernet register read from two consecutive registers
+ * @lp:         Pointer to axienet local structure
+ * @offset:     Address offset from the base address of Axi Ethernet core
+ *
+ * Return: 64 bit value, where the LSB 32 bits correspond to the contents of the register
+ * at baseaddress+offset and MSB 32 bits correspond to the contents of the register at
+ * baseaddress+offset+4
+ *
+ * This function returns the 64 bit value corresponding to two consecutive registers.
+ */
+static inline u64 axienet_ior64(struct axienet_local *lp, off_t offset)
+{
+	return ioread64_lo_hi(lp->regs + offset);
+}
+
 static inline u32 axinet_ior_read_mcr(struct axienet_local *lp)
 {
 	return axienet_ior(lp, XAE_MDIO_MCR_OFFSET);
@@ -1220,10 +1237,10 @@ static inline void axienet_qbv_iow(struct axienet_local *lp, off_t offset,
 #endif
 
 /* Function prototypes visible in xilinx_axienet_mdio.c for other files */
-int axienet_mdio_enable(struct axienet_local *lp);
-void axienet_mdio_disable(struct axienet_local *lp);
-int axienet_mdio_setup(struct axienet_local *lp);
-void axienet_mdio_teardown(struct axienet_local *lp);
+int axienet_mdio_enable_tsn(struct axienet_local *lp);
+void axienet_mdio_disable_tsn(struct axienet_local *lp);
+int axienet_mdio_setup_tsn(struct axienet_local *lp);
+void axienet_mdio_teardown_tsn(struct axienet_local *lp);
 void axienet_adjust_link_tsn(struct net_device *ndev);
 int axienet_tsn_open(struct net_device *ndev);
 int axienet_tsn_stop(struct net_device *ndev);
@@ -1249,6 +1266,7 @@ int axienet_qbv_init(struct net_device *ndev);
 void axienet_qbv_remove(struct net_device *ndev);
 int axienet_set_schedule(struct net_device *ndev, void __user *useraddr);
 int axienet_get_schedule(struct net_device *ndev, void __user *useraddr);
+int axienet_tsn_shaper_tc(struct net_device *dev, enum tc_setup_type type, void *type_data);
 #endif
 
 #ifdef CONFIG_XILINX_TSN_QBR
@@ -1257,13 +1275,17 @@ int axienet_preemption_ctrl(struct net_device *ndev, void __user *useraddr);
 int axienet_preemption_sts(struct net_device *ndev, void __user *useraddr);
 int axienet_preemption_receive(struct net_device *ndev);
 int axienet_preemption_cnt(struct net_device *ndev, void __user *useraddr);
+int axienet_preemption_sts_ethtool(struct net_device *ndev, struct ethtool_mm_state *state);
+void axienet_preemption_cnt_ethtool(struct net_device *ndev, struct ethtool_mm_stats *stats);
+int axienet_preemption_ctrl_ethtool(struct net_device *ndev, struct ethtool_mm_cfg *config_data,
+				    struct netlink_ext_ack *extack);
 #ifdef CONFIG_XILINX_TSN_QBV
 int axienet_qbu_user_override(struct net_device *ndev, void __user *useraddr);
 int axienet_qbu_sts(struct net_device *ndev, void __user *useraddr);
 #endif
 #endif
 
-int axienet_mdio_wait_until_ready(struct axienet_local *lp);
+int axienet_mdio_wait_until_ready_tsn(struct axienet_local *lp);
 void __maybe_unused axienet_bd_free(struct net_device *ndev,
 				    struct axienet_dma_q *q);
 
@@ -1329,5 +1351,8 @@ int axienet_ethtools_set_coalesce(struct net_device *ndev,
 int tsn_switch_get_port_parent_id(struct net_device *dev,
 				  struct netdev_phys_item_id *ppid);
 #endif
+bool xlnx_is_port_ep_netdev(const struct net_device *ndev);
+bool xlnx_is_port_temac_netdev(const struct net_device *ndev);
+bool xlnx_is_port_ep_ex_netdev(const struct net_device *ndev);
 
 #endif /* XILINX_AXI_ENET_TSN_H */

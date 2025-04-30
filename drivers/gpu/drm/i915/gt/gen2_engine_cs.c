@@ -5,7 +5,9 @@
 
 #include "gen2_engine_cs.h"
 #include "i915_drv.h"
+#include "i915_reg.h"
 #include "intel_engine.h"
+#include "intel_engine_regs.h"
 #include "intel_gpu_commands.h"
 #include "intel_gt.h"
 #include "intel_gt_irq.h"
@@ -74,7 +76,7 @@ int gen4_emit_flush_rcs(struct i915_request *rq, u32 mode)
 	cmd = MI_FLUSH;
 	if (mode & EMIT_INVALIDATE) {
 		cmd |= MI_EXE_FLUSH;
-		if (IS_G4X(rq->engine->i915) || GRAPHICS_VER(rq->engine->i915) == 5)
+		if (IS_G4X(rq->i915) || GRAPHICS_VER(rq->i915) == 5)
 			cmd |= MI_INVALIDATE_ISP;
 	}
 

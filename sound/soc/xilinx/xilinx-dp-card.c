@@ -61,7 +61,7 @@ static struct snd_soc_dai_link xilinx_dp_dai_links[] = {
 };
 
 static struct snd_soc_card xilinx_dp_card = {
-	.name		= "DisplayPort monitor",
+	.name		= "DP mon",
 	.owner		= THIS_MODULE,
 	.dai_link	= xilinx_dp_dai_links,
 	.num_links	= 2,
@@ -120,4 +120,4 @@ static struct platform_driver xilinx_dp_aud_driver = {
 module_platform_driver(xilinx_dp_aud_driver);
 
 MODULE_DESCRIPTION("Xilinx DisplayPort Sound Card module");
-MODULE_LICENSE("GPL v2");
+MODULE_LICENSE("GPL");

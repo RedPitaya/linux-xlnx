@@ -18,7 +18,6 @@
 #include <linux/leds-pca9532.h>
 #include <linux/gpio/driver.h>
 #include <linux/of.h>
-#include <linux/of_device.h>
 
 /* m =  num_leds*/
 #define PCA9532_REG_INPUT(i)	((i) >> 3)
@@ -50,9 +49,8 @@ struct pca9532_data {
 	u8 psc[2];
 };
 
-static int pca9532_probe(struct i2c_client *client,
-	const struct i2c_device_id *id);
-static int pca9532_remove(struct i2c_client *client);
+static int pca9532_probe(struct i2c_client *client);
+static void pca9532_remove(struct i2c_client *client);
 
 enum {
 	pca9530,
@@ -318,12 +316,9 @@ static int pca9532_gpio_direction_output(struct gpio_chip *gc, unsigned offset, 
 }
 #endif /* CONFIG_LEDS_PCA9532_GPIO */
 
-static int pca9532_destroy_devices(struct pca9532_data *data, int n_devs)
+static void pca9532_destroy_devices(struct pca9532_data *data, int n_devs)
 {
 	int i = n_devs;
-
-	if (!data)
-		return -EINVAL;
 
 	while (--i >= 0) {
 		switch (data->leds[i].type) {
@@ -346,8 +341,6 @@ static int pca9532_destroy_devices(struct pca9532_data *data, int n_devs)
 	if (data->gpio.parent)
 		gpiochip_remove(&data->gpio);
 #endif
-
-	return 0;
 }
 
 static int pca9532_configure(struct i2c_client *client,
@@ -509,9 +502,9 @@ pca9532_of_populate_pdata(struct device *dev, struct device_node *np)
 	return pdata;
 }
 
-static int pca9532_probe(struct i2c_client *client,
-	const struct i2c_device_id *id)
+static int pca9532_probe(struct i2c_client *client)
 {
+	const struct i2c_device_id *id = i2c_client_get_device_id(client);
 	int devid;
 	struct pca9532_data *data = i2c_get_clientdata(client);
 	struct pca9532_platform_data *pca9532_pdata =
@@ -551,11 +544,11 @@ static int pca9532_probe(struct i2c_client *client,
 	return pca9532_configure(client, data, pca9532_pdata);
 }
 
-static int pca9532_remove(struct i2c_client *client)
+static void pca9532_remove(struct i2c_client *client)
 {
 	struct pca9532_data *data = i2c_get_clientdata(client);
 
-	return pca9532_destroy_devices(data, data->chip_info->num_leds);
+	pca9532_destroy_devices(data, data->chip_info->num_leds);
 }
 
 module_i2c_driver(pca9532_driver);

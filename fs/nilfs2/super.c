@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0+
 /*
- * super.c - NILFS module and super block management.
+ * NILFS module and super block management.
  *
  * Copyright (C) 2005-2008 Nippon Telegraph and Telephone Corporation.
  *
@@ -35,6 +35,7 @@
 #include <linux/writeback.h>
 #include <linux/seq_file.h>
 #include <linux/mount.h>
+#include <linux/fs_context.h>
 #include "nilfs.h"
 #include "export.h"
 #include "mdt.h"
@@ -151,13 +152,14 @@ struct inode *nilfs_alloc_inode(struct super_block *sb)
 {
 	struct nilfs_inode_info *ii;
 
-	ii = kmem_cache_alloc(nilfs_inode_cachep, GFP_NOFS);
+	ii = alloc_inode_sb(sb, nilfs_inode_cachep, GFP_NOFS);
 	if (!ii)
 		return NULL;
 	ii->i_bh = NULL;
 	ii->i_state = 0;
 	ii->i_cno = 0;
-	nilfs_mapping_init(&ii->i_btnode_cache, &ii->vfs_inode);
+	ii->i_assoc_inode = NULL;
+	ii->i_bmap = &ii->i_bmap_data;
 	return &ii->vfs_inode;
 }
 
@@ -371,10 +373,31 @@ static int nilfs_move_2nd_super(struct super_block *sb, loff_t sb2off)
 		goto out;
 	}
 	nsbp = (void *)nsbh->b_data + offset;
-	memset(nsbp, 0, nilfs->ns_blocksize);
+
+	lock_buffer(nsbh);
+	if (sb2i >= 0) {
+		/*
+		 * The position of the second superblock only changes by 4KiB,
+		 * which is larger than the maximum superblock data size
+		 * (= 1KiB), so there is no need to use memmove() to allow
+		 * overlap between source and destination.
+		 */
+		memcpy(nsbp, nilfs->ns_sbp[sb2i], nilfs->ns_sbsize);
+
+		/*
+		 * Zero fill after copy to avoid overwriting in case of move
+		 * within the same block.
+		 */
+		memset(nsbh->b_data, 0, offset);
+		memset((void *)nsbp + nilfs->ns_sbsize, 0,
+		       nsbh->b_size - offset - nilfs->ns_sbsize);
+	} else {
+		memset(nsbh->b_data, 0, nsbh->b_size);
+	}
+	set_buffer_uptodate(nsbh);
+	unlock_buffer(nsbh);
 
 	if (sb2i >= 0) {
-		memcpy(nsbp, nilfs->ns_sbp[sb2i], nilfs->ns_sbsize);
 		brelse(nilfs->ns_sbh[sb2i]);
 		nilfs->ns_sbh[sb2i] = nsbh;
 		nilfs->ns_sbp[sb2i] = nsbp;
@@ -403,9 +426,18 @@ int nilfs_resize_fs(struct super_block *sb, __u64 newsize)
 	int ret;
 
 	ret = -ERANGE;
-	devsize = i_size_read(sb->s_bdev->bd_inode);
+	devsize = bdev_nr_bytes(sb->s_bdev);
 	if (newsize > devsize)
 		goto out;
+
+	/*
+	 * Prevent underflow in second superblock position calculation.
+	 * The exact minimum size check is done in nilfs_sufile_resize().
+	 */
+	if (newsize < 4096) {
+		ret = -ENOSPC;
+		goto out;
+	}
 
 	/*
 	 * Write lock is required to protect some functions depending
@@ -472,6 +504,7 @@ static void nilfs_put_super(struct super_block *sb)
 		up_write(&nilfs->ns_sem);
 	}
 
+	nilfs_sysfs_delete_device_group(nilfs);
 	iput(nilfs->ns_sufile);
 	iput(nilfs->ns_cpfile);
 	iput(nilfs->ns_dat);
@@ -1095,6 +1128,7 @@ nilfs_fill_super(struct super_block *sb, void *data, int silent)
 	nilfs_put_root(fsroot);
 
  failed_unload:
+	nilfs_sysfs_delete_device_group(nilfs);
 	iput(nilfs->ns_sufile);
 	iput(nilfs->ns_cpfile);
 	iput(nilfs->ns_dat);
@@ -1132,8 +1166,6 @@ static int nilfs_remount(struct super_block *sb, int *flags, char *data)
 	if ((bool)(*flags & SB_RDONLY) == sb_rdonly(sb))
 		goto out;
 	if (*flags & SB_RDONLY) {
-		/* Shutting down log writer */
-		nilfs_detach_log_writer(sb);
 		sb->s_flags |= SB_RDONLY;
 
 		/*
@@ -1185,7 +1217,6 @@ static int nilfs_remount(struct super_block *sb, int *flags, char *data)
 }
 
 struct nilfs_super_data {
-	struct block_device *bdev;
 	__u64 cno;
 	int flags;
 };
@@ -1252,68 +1283,49 @@ static int nilfs_identify(char *data, struct nilfs_super_data *sd)
 
 static int nilfs_set_bdev_super(struct super_block *s, void *data)
 {
-	s->s_bdev = data;
-	s->s_dev = s->s_bdev->bd_dev;
+	s->s_dev = *(dev_t *)data;
 	return 0;
 }
 
 static int nilfs_test_bdev_super(struct super_block *s, void *data)
 {
-	return (void *)s->s_bdev == data;
+	return !(s->s_iflags & SB_I_RETIRED) && s->s_dev == *(dev_t *)data;
 }
 
 static struct dentry *
 nilfs_mount(struct file_system_type *fs_type, int flags,
 	     const char *dev_name, void *data)
 {
-	struct nilfs_super_data sd;
+	struct nilfs_super_data sd = { .flags = flags };
 	struct super_block *s;
-	fmode_t mode = FMODE_READ | FMODE_EXCL;
-	struct dentry *root_dentry;
-	int err, s_new = false;
+	dev_t dev;
+	int err;
 
-	if (!(flags & SB_RDONLY))
-		mode |= FMODE_WRITE;
+	if (nilfs_identify(data, &sd))
+		return ERR_PTR(-EINVAL);
 
-	sd.bdev = blkdev_get_by_path(dev_name, mode, fs_type);
-	if (IS_ERR(sd.bdev))
-		return ERR_CAST(sd.bdev);
+	err = lookup_bdev(dev_name, &dev);
+	if (err)
+		return ERR_PTR(err);
 
-	sd.cno = 0;
-	sd.flags = flags;
-	if (nilfs_identify((char *)data, &sd)) {
-		err = -EINVAL;
-		goto failed;
-	}
-
-	/*
-	 * once the super is inserted into the list by sget, s_umount
-	 * will protect the lockfs code from trying to start a snapshot
-	 * while we are mounting
-	 */
-	mutex_lock(&sd.bdev->bd_fsfreeze_mutex);
-	if (sd.bdev->bd_fsfreeze_count > 0) {
-		mutex_unlock(&sd.bdev->bd_fsfreeze_mutex);
-		err = -EBUSY;
-		goto failed;
-	}
 	s = sget(fs_type, nilfs_test_bdev_super, nilfs_set_bdev_super, flags,
-		 sd.bdev);
-	mutex_unlock(&sd.bdev->bd_fsfreeze_mutex);
-	if (IS_ERR(s)) {
-		err = PTR_ERR(s);
-		goto failed;
-	}
+		 &dev);
+	if (IS_ERR(s))
+		return ERR_CAST(s);
 
 	if (!s->s_root) {
-		s_new = true;
-
-		/* New superblock instance created */
-		s->s_mode = mode;
-		snprintf(s->s_id, sizeof(s->s_id), "%pg", sd.bdev);
-		sb_set_blocksize(s, block_size(sd.bdev));
-
-		err = nilfs_fill_super(s, data, flags & SB_SILENT ? 1 : 0);
+		/*
+		 * We drop s_umount here because we need to open the bdev and
+		 * bdev->open_mutex ranks above s_umount (blkdev_put() ->
+		 * __invalidate_device()). It is safe because we have active sb
+		 * reference and SB_BORN is not set yet.
+		 */
+		up_write(&s->s_umount);
+		err = setup_bdev_super(s, flags, NULL);
+		down_write(&s->s_umount);
+		if (!err)
+			err = nilfs_fill_super(s, data,
+					       flags & SB_SILENT ? 1 : 0);
 		if (err)
 			goto failed_super;
 
@@ -1339,24 +1351,18 @@ nilfs_mount(struct file_system_type *fs_type, int flags,
 	}
 
 	if (sd.cno) {
+		struct dentry *root_dentry;
+
 		err = nilfs_attach_snapshot(s, sd.cno, &root_dentry);
 		if (err)
 			goto failed_super;
-	} else {
-		root_dentry = dget(s->s_root);
+		return root_dentry;
 	}
 
-	if (!s_new)
-		blkdev_put(sd.bdev, mode);
-
-	return root_dentry;
+	return dget(s->s_root);
 
  failed_super:
 	deactivate_locked_super(s);
-
- failed:
-	if (!s_new)
-		blkdev_put(sd.bdev, mode);
 	return ERR_PTR(err);
 }
 
@@ -1377,8 +1383,6 @@ static void nilfs_inode_init_once(void *obj)
 #ifdef CONFIG_NILFS_XATTR
 	init_rwsem(&ii->xattr_sem);
 #endif
-	address_space_init_once(&ii->i_btnode_cache);
-	ii->i_bmap = &ii->i_bmap_data;
 	inode_init_once(&ii->vfs_inode);
 }
 

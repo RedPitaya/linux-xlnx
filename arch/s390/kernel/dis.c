@@ -24,8 +24,8 @@
 #include <linux/kdebug.h>
 #include <linux/uaccess.h>
 #include <linux/atomic.h>
+#include <linux/io.h>
 #include <asm/dis.h>
-#include <asm/io.h>
 #include <asm/cpcmd.h>
 #include <asm/lowcore.h>
 #include <asm/debug.h>
@@ -278,6 +278,7 @@ static const unsigned char formats[][6] = {
 	[INSTR_SIL_RDI]	     = { D_20, B_16, I16_32, 0, 0, 0 },
 	[INSTR_SIL_RDU]	     = { D_20, B_16, U16_32, 0, 0, 0 },
 	[INSTR_SIY_IRD]	     = { D20_20, B_16, I8_8, 0, 0, 0 },
+	[INSTR_SIY_RD]	     = { D20_20, B_16, 0, 0, 0, 0 },
 	[INSTR_SIY_URD]	     = { D20_20, B_16, U8_8, 0, 0, 0 },
 	[INSTR_SI_RD]	     = { D_20, B_16, 0, 0, 0, 0 },
 	[INSTR_SI_URD]	     = { D_20, B_16, U8_8, 0, 0, 0 },
@@ -515,7 +516,7 @@ void show_code(struct pt_regs *regs)
 		if (copy_from_regs(regs, code + end, (void *)addr, 2))
 			break;
 	}
-	/* Code snapshot useable ? */
+	/* Code snapshot usable ? */
 	if ((regs->psw.addr & 1) || start >= end) {
 		printk("%s Code: Bad PSW.\n", mode);
 		return;

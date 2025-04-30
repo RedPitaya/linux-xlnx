@@ -204,10 +204,12 @@ static bool faulty_make_request(struct mddev *mddev, struct bio *bio)
 			failit = 1;
 		}
 	}
-	if (failit) {
-		struct bio *b = bio_clone_fast(bio, GFP_NOIO, &mddev->bio_set);
 
-		bio_set_dev(b, conf->rdev->bdev);
+	md_account_bio(mddev, &bio);
+	if (failit) {
+		struct bio *b = bio_alloc_clone(conf->rdev->bdev, bio, GFP_NOIO,
+						&mddev->bio_set);
+
 		b->bi_private = bio;
 		b->bi_end_io = faulty_fail;
 		bio = b;

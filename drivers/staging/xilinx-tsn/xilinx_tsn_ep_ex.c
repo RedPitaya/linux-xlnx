@@ -57,7 +57,7 @@ static int tsn_ex_ep_xmit(struct sk_buff *skb, struct net_device *ndev)
 static void tsn_ex_ep_set_mac_address(struct net_device *ndev, const void *address)
 {
 	if (address)
-		ether_addr_copy(ndev->dev_addr, address);
+		eth_hw_addr_set(ndev, address);
 	if (!is_valid_ether_addr(ndev->dev_addr))
 		eth_hw_addr_random(ndev);
 }
@@ -77,13 +77,18 @@ static const struct net_device_ops ex_ep_netdev_ops = {
 	.ndo_set_mac_address = netdev_set_ex_ep_mac_address,
 };
 
+bool xlnx_is_port_ep_ex_netdev(const struct net_device *ndev)
+{
+	return ndev && (ndev->netdev_ops == &ex_ep_netdev_ops);
+}
+
 static int tsn_ex_ep_probe(struct platform_device *pdev)
 {
 	struct axienet_local *lp;
 	struct net_device *ndev;
 	struct device_node *ep_node;
 	struct axienet_local *ep_lp;
-	const void *mac_addr;
+	u8 mac_addr[ETH_ALEN];
 	int ret = 0;
 	const void *packet_switch;
 
@@ -108,7 +113,7 @@ static int tsn_ex_ep_probe(struct platform_device *pdev)
 	lp->dev = &pdev->dev;
 	lp->options = XAE_OPTION_DEFAULTS;
 	/* Retrieve the MAC address */
-	ret = of_get_mac_address(pdev->dev.of_node, (u8 *)mac_addr);
+	ret = of_get_mac_address(pdev->dev.of_node, mac_addr);
 	if (ret) {
 		dev_err(&pdev->dev, "could not find MAC address\n");
 		goto free_netdev;
@@ -125,8 +130,11 @@ static int tsn_ex_ep_probe(struct platform_device *pdev)
 	}
 	ep_lp = netdev_priv(lp->master);
 	ep_lp->ex_ep = ndev;
-	if (packet_switch)
+	if (packet_switch) {
 		ep_lp->packet_switch = 1;
+		dev_warn(&pdev->dev,
+			 "packet-switch is deprecated and will be removed.Please use \"xlnx,packet-switch\"instead\n");
+	}
 	return ret;
 free_netdev:
 	free_netdev(ndev);
@@ -156,4 +164,4 @@ module_platform_driver(tsn_ex_ep_driver);
 
 MODULE_DESCRIPTION("Xilinx Axi Ethernet driver");
 MODULE_AUTHOR("Xilinx");
-MODULE_LICENSE("GPL v2");
+MODULE_LICENSE("GPL");

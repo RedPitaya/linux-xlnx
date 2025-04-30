@@ -166,7 +166,7 @@ static struct max16065_data *max16065_update_device(struct device *dev)
 			  = i2c_smbus_read_byte_data(client, MAX16065_FAULT(i));
 
 		data->last_updated = jiffies;
-		data->valid = 1;
+		data->valid = true;
 	}
 	mutex_unlock(&data->update_lock);
 	return data;
@@ -600,7 +600,7 @@ static struct i2c_driver max16065_driver = {
 	.driver = {
 		.name = "max16065",
 	},
-	.probe_new = max16065_probe,
+	.probe = max16065_probe,
 	.id_table = max16065_id,
 };
 

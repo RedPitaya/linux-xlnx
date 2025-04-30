@@ -18,6 +18,7 @@
 #include "dlm_internal.h"
 #include "midcomms.h"
 #include "lock.h"
+#include "ast.h"
 
 #define DLM_DEBUG_BUF_LEN 4096
 static char debug_buf[DLM_DEBUG_BUF_LEN];
@@ -170,7 +171,7 @@ static void print_format2_lock(struct seq_file *s, struct dlm_lkb *lkb,
 	u64 xid = 0;
 	u64 us;
 
-	if (lkb->lkb_flags & DLM_IFL_USER) {
+	if (test_bit(DLM_DFL_USER_BIT, &lkb->lkb_dflags)) {
 		if (lkb->lkb_ua)
 			xid = lkb->lkb_ua->xid;
 	}
@@ -188,7 +189,7 @@ static void print_format2_lock(struct seq_file *s, struct dlm_lkb *lkb,
 		   lkb->lkb_ownpid,
 		   (unsigned long long)xid,
 		   lkb->lkb_exflags,
-		   lkb->lkb_flags,
+		   dlm_iflags_val(lkb),
 		   lkb->lkb_status,
 		   lkb->lkb_grmode,
 		   lkb->lkb_rqmode,
@@ -230,7 +231,7 @@ static void print_format3_lock(struct seq_file *s, struct dlm_lkb *lkb,
 {
 	u64 xid = 0;
 
-	if (lkb->lkb_flags & DLM_IFL_USER) {
+	if (test_bit(DLM_DFL_USER_BIT, &lkb->lkb_dflags)) {
 		if (lkb->lkb_ua)
 			xid = lkb->lkb_ua->xid;
 	}
@@ -242,11 +243,11 @@ static void print_format3_lock(struct seq_file *s, struct dlm_lkb *lkb,
 		   lkb->lkb_ownpid,
 		   (unsigned long long)xid,
 		   lkb->lkb_exflags,
-		   lkb->lkb_flags,
+		   dlm_iflags_val(lkb),
 		   lkb->lkb_status,
 		   lkb->lkb_grmode,
 		   lkb->lkb_rqmode,
-		   lkb->lkb_last_bast.mode,
+		   lkb->lkb_last_bast_mode,
 		   rsb_lookup,
 		   lkb->lkb_wait_type,
 		   lkb->lkb_lvbseq,
@@ -365,6 +366,52 @@ static void print_format4(struct dlm_rsb *r, struct seq_file *s)
 	unlock_rsb(r);
 }
 
+static void print_format5_lock(struct seq_file *s, struct dlm_lkb *lkb)
+{
+	struct dlm_callback *cb;
+
+	/* lkb_id lkb_flags mode flags sb_status sb_flags */
+
+	spin_lock(&lkb->lkb_cb_lock);
+	list_for_each_entry(cb, &lkb->lkb_callbacks, list) {
+		seq_printf(s, "%x %x %d %x %d %x\n",
+			   lkb->lkb_id,
+			   dlm_iflags_val(lkb),
+			   cb->mode,
+			   cb->flags,
+			   cb->sb_status,
+			   cb->sb_flags);
+	}
+	spin_unlock(&lkb->lkb_cb_lock);
+}
+
+static void print_format5(struct dlm_rsb *r, struct seq_file *s)
+{
+	struct dlm_lkb *lkb;
+
+	lock_rsb(r);
+
+	list_for_each_entry(lkb, &r->res_grantqueue, lkb_statequeue) {
+		print_format5_lock(s, lkb);
+		if (seq_has_overflowed(s))
+			goto out;
+	}
+
+	list_for_each_entry(lkb, &r->res_convertqueue, lkb_statequeue) {
+		print_format5_lock(s, lkb);
+		if (seq_has_overflowed(s))
+			goto out;
+	}
+
+	list_for_each_entry(lkb, &r->res_waitqueue, lkb_statequeue) {
+		print_format5_lock(s, lkb);
+		if (seq_has_overflowed(s))
+			goto out;
+	}
+ out:
+	unlock_rsb(r);
+}
+
 struct rsbtbl_iter {
 	struct dlm_rsb *rsb;
 	unsigned bucket;
@@ -408,6 +455,13 @@ static int table_seq_show(struct seq_file *seq, void *iter_ptr)
 		}
 		print_format4(ri->rsb, seq);
 		break;
+	case 5:
+		if (ri->header) {
+			seq_puts(seq, "lkb_id lkb_flags mode flags sb_status sb_flags\n");
+			ri->header = 0;
+		}
+		print_format5(ri->rsb, seq);
+		break;
 	}
 
 	return 0;
@@ -417,6 +471,7 @@ static const struct seq_operations format1_seq_ops;
 static const struct seq_operations format2_seq_ops;
 static const struct seq_operations format3_seq_ops;
 static const struct seq_operations format4_seq_ops;
+static const struct seq_operations format5_seq_ops;
 
 static void *table_seq_start(struct seq_file *seq, loff_t *pos)
 {
@@ -448,6 +503,8 @@ static void *table_seq_start(struct seq_file *seq, loff_t *pos)
 		ri->format = 3;
 	if (seq->op == &format4_seq_ops)
 		ri->format = 4;
+	if (seq->op == &format5_seq_ops)
+		ri->format = 5;
 
 	tree = toss ? &ls->ls_rsbtbl[bucket].toss : &ls->ls_rsbtbl[bucket].keep;
 
@@ -602,10 +659,18 @@ static const struct seq_operations format4_seq_ops = {
 	.show  = table_seq_show,
 };
 
+static const struct seq_operations format5_seq_ops = {
+	.start = table_seq_start,
+	.next  = table_seq_next,
+	.stop  = table_seq_stop,
+	.show  = table_seq_show,
+};
+
 static const struct file_operations format1_fops;
 static const struct file_operations format2_fops;
 static const struct file_operations format3_fops;
 static const struct file_operations format4_fops;
+static const struct file_operations format5_fops;
 
 static int table_open1(struct inode *inode, struct file *file)
 {
@@ -635,6 +700,35 @@ static int table_open2(struct inode *inode, struct file *file)
 	return 0;
 }
 
+static ssize_t table_write2(struct file *file, const char __user *user_buf,
+			    size_t count, loff_t *ppos)
+{
+	struct seq_file *seq = file->private_data;
+	int n, len, lkb_nodeid, lkb_status, error;
+	char name[DLM_RESNAME_MAXLEN + 1] = {};
+	struct dlm_ls *ls = seq->private;
+	unsigned int lkb_flags;
+	char buf[256] = {};
+	uint32_t lkb_id;
+
+	if (copy_from_user(buf, user_buf,
+			   min_t(size_t, sizeof(buf) - 1, count)))
+		return -EFAULT;
+
+	n = sscanf(buf, "%x %" __stringify(DLM_RESNAME_MAXLEN) "s %x %d %d",
+		   &lkb_id, name, &lkb_flags, &lkb_nodeid, &lkb_status);
+	if (n != 5)
+		return -EINVAL;
+
+	len = strnlen(name, DLM_RESNAME_MAXLEN);
+	error = dlm_debug_add_lkb(ls, lkb_id, name, len, lkb_flags,
+				  lkb_nodeid, lkb_status);
+	if (error)
+		return error;
+
+	return count;
+}
+
 static int table_open3(struct inode *inode, struct file *file)
 {
 	struct seq_file *seq;
@@ -654,7 +748,21 @@ static int table_open4(struct inode *inode, struct file *file)
 	struct seq_file *seq;
 	int ret;
 
-	ret = seq_open(file, &format4_seq_ops);
+	ret = seq_open(file, &format5_seq_ops);
+	if (ret)
+		return ret;
+
+	seq = file->private_data;
+	seq->private = inode->i_private; /* the dlm_ls */
+	return 0;
+}
+
+static int table_open5(struct inode *inode, struct file *file)
+{
+	struct seq_file *seq;
+	int ret;
+
+	ret = seq_open(file, &format5_seq_ops);
 	if (ret)
 		return ret;
 
@@ -675,6 +783,7 @@ static const struct file_operations format2_fops = {
 	.owner   = THIS_MODULE,
 	.open    = table_open2,
 	.read    = seq_read,
+	.write   = table_write2,
 	.llseek  = seq_lseek,
 	.release = seq_release
 };
@@ -690,6 +799,14 @@ static const struct file_operations format3_fops = {
 static const struct file_operations format4_fops = {
 	.owner   = THIS_MODULE,
 	.open    = table_open4,
+	.read    = seq_read,
+	.llseek  = seq_lseek,
+	.release = seq_release
+};
+
+static const struct file_operations format5_fops = {
+	.owner   = THIS_MODULE,
+	.open    = table_open5,
 	.read    = seq_read,
 	.llseek  = seq_lseek,
 	.release = seq_release
@@ -724,10 +841,35 @@ static ssize_t waiters_read(struct file *file, char __user *userbuf,
 	return rv;
 }
 
+static ssize_t waiters_write(struct file *file, const char __user *user_buf,
+			     size_t count, loff_t *ppos)
+{
+	struct dlm_ls *ls = file->private_data;
+	int mstype, to_nodeid;
+	char buf[128] = {};
+	uint32_t lkb_id;
+	int n, error;
+
+	if (copy_from_user(buf, user_buf,
+			   min_t(size_t, sizeof(buf) - 1, count)))
+		return -EFAULT;
+
+	n = sscanf(buf, "%x %d %d", &lkb_id, &mstype, &to_nodeid);
+	if (n != 3)
+		return -EINVAL;
+
+	error = dlm_debug_add_lkb_to_waiters(ls, lkb_id, mstype, to_nodeid);
+	if (error)
+		return error;
+
+	return count;
+}
+
 static const struct file_operations waiters_fops = {
 	.owner   = THIS_MODULE,
 	.open    = simple_open,
 	.read    = waiters_read,
+	.write   = waiters_write,
 	.llseek  = default_llseek,
 };
 
@@ -738,6 +880,7 @@ void dlm_delete_debug_file(struct dlm_ls *ls)
 	debugfs_remove(ls->ls_debug_locks_dentry);
 	debugfs_remove(ls->ls_debug_all_dentry);
 	debugfs_remove(ls->ls_debug_toss_dentry);
+	debugfs_remove(ls->ls_debug_queued_asts_dentry);
 }
 
 static int dlm_state_show(struct seq_file *file, void *offset)
@@ -768,6 +911,42 @@ static int dlm_version_show(struct seq_file *file, void *offset)
 }
 DEFINE_SHOW_ATTRIBUTE(dlm_version);
 
+static ssize_t dlm_rawmsg_write(struct file *fp, const char __user *user_buf,
+				size_t count, loff_t *ppos)
+{
+	void *buf;
+	int ret;
+
+	if (count > PAGE_SIZE || count < sizeof(struct dlm_header))
+		return -EINVAL;
+
+	buf = kmalloc(PAGE_SIZE, GFP_NOFS);
+	if (!buf)
+		return -ENOMEM;
+
+	if (copy_from_user(buf, user_buf, count)) {
+		ret = -EFAULT;
+		goto out;
+	}
+
+	ret = dlm_midcomms_rawmsg_send(fp->private_data, buf, count);
+	if (ret)
+		goto out;
+
+	kfree(buf);
+	return count;
+
+out:
+	kfree(buf);
+	return ret;
+}
+
+static const struct file_operations dlm_rawmsg_fops = {
+	.open	= simple_open,
+	.write	= dlm_rawmsg_write,
+	.llseek	= no_llseek,
+};
+
 void *dlm_create_debug_comms_file(int nodeid, void *data)
 {
 	struct dentry *d_node;
@@ -782,6 +961,7 @@ void *dlm_create_debug_comms_file(int nodeid, void *data)
 	debugfs_create_file("send_queue_count", 0444, d_node, data,
 			    &dlm_send_queue_cnt_fops);
 	debugfs_create_file("version", 0444, d_node, data, &dlm_version_fops);
+	debugfs_create_file("rawmsg", 0200, d_node, data, &dlm_rawmsg_fops);
 
 	return d_node;
 }
@@ -809,7 +989,7 @@ void dlm_create_debug_file(struct dlm_ls *ls)
 	snprintf(name, DLM_LOCKSPACE_LEN + 8, "%s_locks", ls->ls_name);
 
 	ls->ls_debug_locks_dentry = debugfs_create_file(name,
-							S_IFREG | S_IRUGO,
+							0644,
 							dlm_root,
 							ls,
 							&format2_fops);
@@ -840,10 +1020,21 @@ void dlm_create_debug_file(struct dlm_ls *ls)
 	snprintf(name, DLM_LOCKSPACE_LEN + 8, "%s_waiters", ls->ls_name);
 
 	ls->ls_debug_waiters_dentry = debugfs_create_file(name,
-							  S_IFREG | S_IRUGO,
+							  0644,
 							  dlm_root,
 							  ls,
 							  &waiters_fops);
+
+	/* format 5 */
+
+	memset(name, 0, sizeof(name));
+	snprintf(name, DLM_LOCKSPACE_LEN + 8, "%s_queued_asts", ls->ls_name);
+
+	ls->ls_debug_queued_asts_dentry = debugfs_create_file(name,
+							      0644,
+							      dlm_root,
+							      ls,
+							      &format5_fops);
 }
 
 void __init dlm_register_debugfs(void)

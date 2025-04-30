@@ -1126,8 +1126,7 @@ static int bgx_lmac_enable(struct bgx *bgx, u8 lmacid)
 	}
 
 poll:
-	lmac->check_link = alloc_workqueue("check_link", WQ_UNBOUND |
-					   WQ_MEM_RECLAIM, 1);
+	lmac->check_link = alloc_ordered_workqueue("check_link", WQ_MEM_RECLAIM);
 	if (!lmac->check_link)
 		return -ENOMEM;
 	INIT_DELAYED_WORK(&lmac->dwork, bgx_poll_for_link);
@@ -1387,10 +1386,10 @@ static int acpi_get_mac_address(struct device *dev, struct acpi_device *adev,
 				u8 *dst)
 {
 	u8 mac[ETH_ALEN];
-	u8 *addr;
+	int ret;
 
-	addr = fwnode_get_mac_address(acpi_fwnode_handle(adev), mac, ETH_ALEN);
-	if (!addr) {
+	ret = fwnode_get_mac_address(acpi_fwnode_handle(adev), mac);
+	if (ret) {
 		dev_err(dev, "MAC address invalid: %pM\n", mac);
 		return -EINVAL;
 	}
@@ -1409,7 +1408,8 @@ static acpi_status bgx_acpi_register_phy(acpi_handle handle,
 	struct device *dev = &bgx->pdev->dev;
 	struct acpi_device *adev;
 
-	if (acpi_bus_get_device(handle, &adev))
+	adev = acpi_fetch_acpi_dev(handle);
+	if (!adev)
 		goto out;
 
 	acpi_get_mac_address(dev, adev, bgx->lmac[bgx->acpi_lmac_idx].mac);
@@ -1435,8 +1435,10 @@ static acpi_status bgx_acpi_match_id(acpi_handle handle, u32 lvl,
 		return AE_OK;
 	}
 
-	if (strncmp(string.pointer, bgx_sel, 4))
+	if (strncmp(string.pointer, bgx_sel, 4)) {
+		kfree(string.pointer);
 		return AE_OK;
+	}
 
 	acpi_walk_namespace(ACPI_TYPE_DEVICE, handle, 1,
 			    bgx_acpi_register_phy, NULL, bgx, NULL);
@@ -1597,9 +1599,8 @@ static int bgx_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
 
 	err = pcim_enable_device(pdev);
 	if (err) {
-		dev_err(dev, "Failed to enable PCI device\n");
 		pci_set_drvdata(pdev, NULL);
-		return err;
+		return dev_err_probe(dev, err, "Failed to enable PCI device\n");
 	}
 
 	err = pci_request_regions(pdev, DRV_NAME);

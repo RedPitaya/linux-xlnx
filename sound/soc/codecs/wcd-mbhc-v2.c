@@ -5,6 +5,7 @@
 #include <linux/init.h>
 #include <linux/slab.h>
 #include <linux/device.h>
+#include <linux/pm_runtime.h>
 #include <linux/printk.h>
 #include <linux/delay.h>
 #include <linux/kernel.h>
@@ -711,6 +712,16 @@ static irqreturn_t wcd_mbhc_hphr_ocp_irq(int irq, void *data)
 static int wcd_mbhc_initialise(struct wcd_mbhc *mbhc)
 {
 	struct snd_soc_component *component = mbhc->component;
+	int ret;
+
+	ret = pm_runtime_get_sync(component->dev);
+	if (ret < 0 && ret != -EACCES) {
+		dev_err_ratelimited(component->dev,
+				    "pm_runtime_get_sync failed in %s, ret %d\n",
+				    __func__, ret);
+		pm_runtime_put_noidle(component->dev);
+		return ret;
+	}
 
 	mutex_lock(&mbhc->lock);
 
@@ -750,6 +761,9 @@ static int wcd_mbhc_initialise(struct wcd_mbhc *mbhc)
 	wcd_program_btn_threshold(mbhc, false);
 
 	mutex_unlock(&mbhc->lock);
+
+	pm_runtime_mark_last_busy(component->dev);
+	pm_runtime_put_autosuspend(component->dev);
 
 	return 0;
 }
@@ -1022,6 +1036,52 @@ static int wcd_mbhc_get_plug_from_adc(struct wcd_mbhc *mbhc, int adc_result)
 	return plug_type;
 }
 
+static int wcd_mbhc_get_spl_hs_thres(struct wcd_mbhc *mbhc)
+{
+	int hs_threshold, micbias_mv;
+
+	micbias_mv = wcd_mbhc_get_micbias(mbhc);
+	if (mbhc->cfg->hs_thr && mbhc->cfg->micb_mv != WCD_MBHC_ADC_MICBIAS_MV) {
+		if (mbhc->cfg->micb_mv == micbias_mv)
+			hs_threshold = mbhc->cfg->hs_thr;
+		else
+			hs_threshold = (mbhc->cfg->hs_thr * micbias_mv) / mbhc->cfg->micb_mv;
+	} else {
+		hs_threshold = ((WCD_MBHC_ADC_HS_THRESHOLD_MV * micbias_mv) /
+							WCD_MBHC_ADC_MICBIAS_MV);
+	}
+	return hs_threshold;
+}
+
+static bool wcd_mbhc_check_for_spl_headset(struct wcd_mbhc *mbhc)
+{
+	bool is_spl_hs = false;
+	int output_mv, hs_threshold, hph_threshold;
+
+	if (!mbhc->mbhc_cb->mbhc_micb_ctrl_thr_mic)
+		return false;
+
+	/* Bump up MIC_BIAS2 to 2.7V */
+	mbhc->mbhc_cb->mbhc_micb_ctrl_thr_mic(mbhc->component, MIC_BIAS_2, true);
+	usleep_range(10000, 10100);
+
+	output_mv = wcd_measure_adc_once(mbhc, MUX_CTL_IN2P);
+	hs_threshold = wcd_mbhc_get_spl_hs_thres(mbhc);
+	hph_threshold = wcd_mbhc_adc_get_hph_thres(mbhc);
+
+	if (!(output_mv > hs_threshold || output_mv < hph_threshold))
+		is_spl_hs = true;
+
+	/* Back MIC_BIAS2 to 1.8v if the type is not special headset */
+	if (!is_spl_hs) {
+		mbhc->mbhc_cb->mbhc_micb_ctrl_thr_mic(mbhc->component, MIC_BIAS_2, false);
+		/* Add 10ms delay for micbias to settle */
+		usleep_range(10000, 10100);
+	}
+
+	return is_spl_hs;
+}
+
 static void wcd_correct_swch_plug(struct work_struct *work)
 {
 	struct wcd_mbhc *mbhc;
@@ -1029,12 +1089,23 @@ static void wcd_correct_swch_plug(struct work_struct *work)
 	enum wcd_mbhc_plug_type plug_type = MBHC_PLUG_TYPE_INVALID;
 	unsigned long timeout;
 	int pt_gnd_mic_swap_cnt = 0;
-	int output_mv, cross_conn, hs_threshold, try = 0;
+	int output_mv, cross_conn, hs_threshold, try = 0, micbias_mv;
+	bool is_spl_hs = false;
 	bool is_pa_on;
+	int ret;
 
 	mbhc = container_of(work, struct wcd_mbhc, correct_plug_swch);
 	component = mbhc->component;
 
+	ret = pm_runtime_get_sync(component->dev);
+	if (ret < 0 && ret != -EACCES) {
+		dev_err_ratelimited(component->dev,
+				    "pm_runtime_get_sync failed in %s, ret %d\n",
+				    __func__, ret);
+		pm_runtime_put_noidle(component->dev);
+		return;
+	}
+	micbias_mv = wcd_mbhc_get_micbias(mbhc);
 	hs_threshold = wcd_mbhc_adc_get_hs_thres(mbhc);
 
 	/* Mask ADC COMPLETE interrupt */
@@ -1097,6 +1168,16 @@ correct_plug_type:
 		plug_type = wcd_mbhc_get_plug_from_adc(mbhc, output_mv);
 		is_pa_on = wcd_mbhc_read_field(mbhc, WCD_MBHC_HPH_PA_EN);
 
+		if (output_mv > hs_threshold && !is_spl_hs) {
+			is_spl_hs = wcd_mbhc_check_for_spl_headset(mbhc);
+			output_mv = wcd_measure_adc_once(mbhc, MUX_CTL_IN2P);
+
+			if (is_spl_hs) {
+				hs_threshold *= wcd_mbhc_get_micbias(mbhc);
+				hs_threshold /= micbias_mv;
+			}
+		}
+
 		if ((output_mv <= hs_threshold) && !is_pa_on) {
 			/* Check for cross connection*/
 			cross_conn = wcd_check_cross_conn(mbhc);
@@ -1110,7 +1191,7 @@ correct_plug_type:
 				pt_gnd_mic_swap_cnt = 0;
 				plug_type = wcd_mbhc_get_plug_from_adc(mbhc, output_mv);
 				continue;
-			} else if (cross_conn < 0) /* Error */
+			} else /* Error if (cross_conn < 0) */
 				continue;
 
 			if (pt_gnd_mic_swap_cnt == GND_MIC_SWAP_THRESHOLD) {
@@ -1122,14 +1203,19 @@ correct_plug_type:
 			}
 		}
 
-		if (output_mv > hs_threshold) /* cable is extension cable */
+		/* cable is extension cable */
+		if (output_mv > hs_threshold || mbhc->force_linein)
 			plug_type = MBHC_PLUG_TYPE_HIGH_HPH;
 	}
 
 	wcd_mbhc_bcs_enable(mbhc, plug_type, true);
 
-	if (plug_type == MBHC_PLUG_TYPE_HIGH_HPH)
-		wcd_mbhc_write_field(mbhc, WCD_MBHC_ELECT_ISRC_EN, 1);
+	if (plug_type == MBHC_PLUG_TYPE_HIGH_HPH) {
+		if (is_spl_hs)
+			plug_type = MBHC_PLUG_TYPE_HEADSET;
+		else
+			wcd_mbhc_write_field(mbhc, WCD_MBHC_ELECT_ISRC_EN, 1);
+	}
 
 	wcd_mbhc_write_field(mbhc, WCD_MBHC_ADC_MODE, 0);
 	wcd_mbhc_write_field(mbhc, WCD_MBHC_ADC_EN, 0);
@@ -1169,6 +1255,9 @@ exit:
 
 	if (mbhc->mbhc_cb->hph_pull_down_ctrl)
 		mbhc->mbhc_cb->hph_pull_down_ctrl(component, true);
+
+	pm_runtime_mark_last_busy(component->dev);
+	pm_runtime_put_autosuspend(component->dev);
 }
 
 static irqreturn_t wcd_mbhc_adc_hs_rem_irq(int irq, void *data)
@@ -1176,7 +1265,6 @@ static irqreturn_t wcd_mbhc_adc_hs_rem_irq(int irq, void *data)
 	struct wcd_mbhc *mbhc = data;
 	unsigned long timeout;
 	int adc_threshold, output_mv, retry = 0;
-	bool hphpa_on = false;
 
 	mutex_lock(&mbhc->lock);
 	timeout = jiffies + msecs_to_jiffies(WCD_FAKE_REMOVAL_MIN_PERIOD_MS);
@@ -1210,10 +1298,6 @@ static irqreturn_t wcd_mbhc_adc_hs_rem_irq(int irq, void *data)
 	wcd_mbhc_elec_hs_report_unplug(mbhc);
 	wcd_mbhc_write_field(mbhc, WCD_MBHC_BTN_ISRC_CTL, 0);
 
-	if (hphpa_on) {
-		hphpa_on = false;
-		wcd_mbhc_write_field(mbhc, WCD_MBHC_HPH_PA_EN, 3);
-	}
 exit:
 	mutex_unlock(&mbhc->lock);
 	return IRQ_HANDLED;
@@ -1222,7 +1306,7 @@ exit:
 static irqreturn_t wcd_mbhc_adc_hs_ins_irq(int irq, void *data)
 {
 	struct wcd_mbhc *mbhc = data;
-	u8 clamp_state = 0;
+	u8 clamp_state;
 	u8 clamp_retry = WCD_MBHC_FAKE_INS_RETRY;
 
 	/*
@@ -1370,7 +1454,7 @@ struct wcd_mbhc *wcd_mbhc_init(struct snd_soc_component *component,
 		return ERR_PTR(-EINVAL);
 	}
 
-	mbhc = devm_kzalloc(dev, sizeof(*mbhc), GFP_KERNEL);
+	mbhc = kzalloc(sizeof(*mbhc), GFP_KERNEL);
 	if (!mbhc)
 		return ERR_PTR(-ENOMEM);
 
@@ -1390,61 +1474,76 @@ struct wcd_mbhc *wcd_mbhc_init(struct snd_soc_component *component,
 
 	INIT_WORK(&mbhc->correct_plug_swch, wcd_correct_swch_plug);
 
-	ret = devm_request_threaded_irq(dev, mbhc->intr_ids->mbhc_sw_intr, NULL,
+	ret = request_threaded_irq(mbhc->intr_ids->mbhc_sw_intr, NULL,
 					wcd_mbhc_mech_plug_detect_irq,
 					IRQF_ONESHOT | IRQF_TRIGGER_RISING,
 					"mbhc sw intr", mbhc);
 	if (ret)
-		goto err;
+		goto err_free_mbhc;
 
-	ret = devm_request_threaded_irq(dev, mbhc->intr_ids->mbhc_btn_press_intr, NULL,
+	ret = request_threaded_irq(mbhc->intr_ids->mbhc_btn_press_intr, NULL,
 					wcd_mbhc_btn_press_handler,
 					IRQF_ONESHOT | IRQF_TRIGGER_RISING,
 					"Button Press detect", mbhc);
 	if (ret)
-		goto err;
+		goto err_free_sw_intr;
 
-	ret = devm_request_threaded_irq(dev, mbhc->intr_ids->mbhc_btn_release_intr, NULL,
+	ret = request_threaded_irq(mbhc->intr_ids->mbhc_btn_release_intr, NULL,
 					wcd_mbhc_btn_release_handler,
 					IRQF_ONESHOT | IRQF_TRIGGER_RISING,
 					"Button Release detect", mbhc);
 	if (ret)
-		goto err;
+		goto err_free_btn_press_intr;
 
-	ret = devm_request_threaded_irq(dev, mbhc->intr_ids->mbhc_hs_ins_intr, NULL,
+	ret = request_threaded_irq(mbhc->intr_ids->mbhc_hs_ins_intr, NULL,
 					wcd_mbhc_adc_hs_ins_irq,
 					IRQF_ONESHOT | IRQF_TRIGGER_RISING,
 					"Elect Insert", mbhc);
 	if (ret)
-		goto err;
+		goto err_free_btn_release_intr;
 
 	disable_irq_nosync(mbhc->intr_ids->mbhc_hs_ins_intr);
 
-	ret = devm_request_threaded_irq(dev, mbhc->intr_ids->mbhc_hs_rem_intr, NULL,
+	ret = request_threaded_irq(mbhc->intr_ids->mbhc_hs_rem_intr, NULL,
 					wcd_mbhc_adc_hs_rem_irq,
 					IRQF_ONESHOT | IRQF_TRIGGER_RISING,
 					"Elect Remove", mbhc);
 	if (ret)
-		goto err;
+		goto err_free_hs_ins_intr;
 
 	disable_irq_nosync(mbhc->intr_ids->mbhc_hs_rem_intr);
 
-	ret = devm_request_threaded_irq(dev, mbhc->intr_ids->hph_left_ocp, NULL,
+	ret = request_threaded_irq(mbhc->intr_ids->hph_left_ocp, NULL,
 					wcd_mbhc_hphl_ocp_irq,
 					IRQF_ONESHOT | IRQF_TRIGGER_RISING,
 					"HPH_L OCP detect", mbhc);
 	if (ret)
-		goto err;
+		goto err_free_hs_rem_intr;
 
-	ret = devm_request_threaded_irq(dev, mbhc->intr_ids->hph_right_ocp, NULL,
+	ret = request_threaded_irq(mbhc->intr_ids->hph_right_ocp, NULL,
 					wcd_mbhc_hphr_ocp_irq,
 					IRQF_ONESHOT | IRQF_TRIGGER_RISING,
 					"HPH_R OCP detect", mbhc);
 	if (ret)
-		goto err;
+		goto err_free_hph_left_ocp;
 
 	return mbhc;
-err:
+
+err_free_hph_left_ocp:
+	free_irq(mbhc->intr_ids->hph_left_ocp, mbhc);
+err_free_hs_rem_intr:
+	free_irq(mbhc->intr_ids->mbhc_hs_rem_intr, mbhc);
+err_free_hs_ins_intr:
+	free_irq(mbhc->intr_ids->mbhc_hs_ins_intr, mbhc);
+err_free_btn_release_intr:
+	free_irq(mbhc->intr_ids->mbhc_btn_release_intr, mbhc);
+err_free_btn_press_intr:
+	free_irq(mbhc->intr_ids->mbhc_btn_press_intr, mbhc);
+err_free_sw_intr:
+	free_irq(mbhc->intr_ids->mbhc_sw_intr, mbhc);
+err_free_mbhc:
+	kfree(mbhc);
+
 	dev_err(dev, "Failed to request mbhc interrupts %d\n", ret);
 
 	return ERR_PTR(ret);
@@ -1453,9 +1552,19 @@ EXPORT_SYMBOL(wcd_mbhc_init);
 
 void wcd_mbhc_deinit(struct wcd_mbhc *mbhc)
 {
+	free_irq(mbhc->intr_ids->hph_right_ocp, mbhc);
+	free_irq(mbhc->intr_ids->hph_left_ocp, mbhc);
+	free_irq(mbhc->intr_ids->mbhc_hs_rem_intr, mbhc);
+	free_irq(mbhc->intr_ids->mbhc_hs_ins_intr, mbhc);
+	free_irq(mbhc->intr_ids->mbhc_btn_release_intr, mbhc);
+	free_irq(mbhc->intr_ids->mbhc_btn_press_intr, mbhc);
+	free_irq(mbhc->intr_ids->mbhc_sw_intr, mbhc);
+
 	mutex_lock(&mbhc->lock);
 	wcd_cancel_hs_detect_plug(mbhc,	&mbhc->correct_plug_swch);
 	mutex_unlock(&mbhc->lock);
+
+	kfree(mbhc);
 }
 EXPORT_SYMBOL(wcd_mbhc_deinit);
 

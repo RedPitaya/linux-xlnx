@@ -33,6 +33,7 @@
 #ifndef MLX4_DEVICE_H
 #define MLX4_DEVICE_H
 
+#include <linux/auxiliary_bus.h>
 #include <linux/if_ether.h>
 #include <linux/pci.h>
 #include <linux/completion.h>
@@ -889,6 +890,12 @@ struct mlx4_dev {
 	u8  uar_page_shift;
 };
 
+struct mlx4_adev {
+	struct auxiliary_device adev;
+	struct mlx4_dev *mdev;
+	int idx;
+};
+
 struct mlx4_clock_params {
 	u64 offset;
 	u8 bar;
@@ -1086,6 +1093,19 @@ static inline void *mlx4_buf_offset(struct mlx4_buf *buf, int offset)
 		return buf->page_list[offset >> PAGE_SHIFT].buf +
 			(offset & (PAGE_SIZE - 1));
 }
+
+static inline int mlx4_is_bonded(struct mlx4_dev *dev)
+{
+	return !!(dev->flags & MLX4_FLAG_BONDED);
+}
+
+static inline int mlx4_is_mf_bonded(struct mlx4_dev *dev)
+{
+	return (mlx4_is_bonded(dev) && mlx4_is_mfunc(dev));
+}
+
+int mlx4_queue_bond_work(struct mlx4_dev *dev, int is_bonded, u8 v2p_p1,
+			 u8 v2p_p2);
 
 int mlx4_pd_alloc(struct mlx4_dev *dev, u32 *pdn);
 void mlx4_pd_free(struct mlx4_dev *dev, u32 pdn);
@@ -1436,7 +1456,7 @@ int mlx4_map_sw_to_hw_steering_id(struct mlx4_dev *dev,
 				  enum mlx4_net_trans_rule_id id);
 int mlx4_hw_rule_sz(struct mlx4_dev *dev, enum mlx4_net_trans_rule_id id);
 
-int mlx4_tunnel_steer_add(struct mlx4_dev *dev, unsigned char *addr,
+int mlx4_tunnel_steer_add(struct mlx4_dev *dev, const unsigned char *addr,
 			  int port, int qpn, u16 prio, u64 *reg_id);
 
 void mlx4_sync_pkey_table(struct mlx4_dev *dev, int slave, int port,

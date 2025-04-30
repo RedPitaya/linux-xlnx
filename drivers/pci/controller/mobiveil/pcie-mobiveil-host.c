@@ -17,9 +17,6 @@
 #include <linux/kernel.h>
 #include <linux/module.h>
 #include <linux/msi.h>
-#include <linux/of_address.h>
-#include <linux/of_irq.h>
-#include <linux/of_platform.h>
 #include <linux/of_pci.h>
 #include <linux/pci.h>
 #include <linux/platform_device.h>
@@ -295,7 +292,7 @@ int mobiveil_host_init(struct mobiveil_pcie *pcie, bool reinit)
 	/* fixup for PCIe class register */
 	value = mobiveil_csr_readl(pcie, PAB_INTP_AXI_PIO_CLASS);
 	value &= 0xff;
-	value |= (PCI_CLASS_BRIDGE_PCI << 16);
+	value |= PCI_CLASS_BRIDGE_PCI_NORMAL << 8;
 	mobiveil_csr_writel(pcie, value, PAB_INTP_AXI_PIO_CLASS);
 
 	return 0;

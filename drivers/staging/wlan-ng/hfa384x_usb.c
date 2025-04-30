@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: (GPL-2.0 OR MPL-1.1)
-/* src/prism2/driver/hfa384x_usb.c
+/*
  *
  * Functions that talk to the USB variant of the Intersil hfa384x MAC
  *
@@ -7,27 +7,6 @@
  * --------------------------------------------------------------------
  *
  * linux-wlan
- *
- *   The contents of this file are subject to the Mozilla Public
- *   License Version 1.1 (the "License"); you may not use this file
- *   except in compliance with the License. You may obtain a copy of
- *   the License at http://www.mozilla.org/MPL/
- *
- *   Software distributed under the License is distributed on an "AS
- *   IS" basis, WITHOUT WARRANTY OF ANY KIND, either express or
- *   implied. See the License for the specific language governing
- *   rights and limitations under the License.
- *
- *   Alternatively, the contents of this file may be used under the
- *   terms of the GNU Public License version 2 (the "GPL"), in which
- *   case the provisions of the GPL are applicable instead of the
- *   above.  If you wish to allow the use of your version of this file
- *   only under the terms of the GPL and not to allow others to use
- *   your version of this file under the MPL, indicate your decision
- *   by deleting the provisions above and replace them with the notice
- *   and other provisions required by the GPL.  If you do not delete
- *   the provisions above, a recipient may use your version of this
- *   file under either the MPL or the GPL.
  *
  * --------------------------------------------------------------------
  *
@@ -191,9 +170,9 @@ static void hfa384x_usbctlx_resptimerfn(struct timer_list *t);
 
 static void hfa384x_usb_throttlefn(struct timer_list *t);
 
-static void hfa384x_usbctlx_completion_task(struct tasklet_struct *t);
+static void hfa384x_usbctlx_completion_task(struct work_struct *work);
 
-static void hfa384x_usbctlx_reaper_task(struct tasklet_struct *t);
+static void hfa384x_usbctlx_reaper_task(struct work_struct *work);
 
 static int hfa384x_usbctlx_submit(struct hfa384x *hw,
 				  struct hfa384x_usbctlx *ctlx);
@@ -539,8 +518,8 @@ void hfa384x_create(struct hfa384x *hw, struct usb_device *usb)
 	/* Initialize the authentication queue */
 	skb_queue_head_init(&hw->authq);
 
-	tasklet_setup(&hw->reaper_bh, hfa384x_usbctlx_reaper_task);
-	tasklet_setup(&hw->completion_bh, hfa384x_usbctlx_completion_task);
+	INIT_WORK(&hw->reaper_bh, hfa384x_usbctlx_reaper_task);
+	INIT_WORK(&hw->completion_bh, hfa384x_usbctlx_completion_task);
 	INIT_WORK(&hw->link_bh, prism2sta_processing_defer);
 	INIT_WORK(&hw->usb_work, hfa384x_usb_defer);
 
@@ -1116,8 +1095,8 @@ cleanup:
 		if (ctlx == get_active_ctlx(hw)) {
 			spin_unlock_irqrestore(&hw->ctlxq.lock, flags);
 
-			del_singleshot_timer_sync(&hw->reqtimer);
-			del_singleshot_timer_sync(&hw->resptimer);
+			del_timer_sync(&hw->reqtimer);
+			del_timer_sync(&hw->resptimer);
 			hw->req_timer_done = 1;
 			hw->resp_timer_done = 1;
 			usb_kill_urb(&hw->ctlx_urb);
@@ -2585,20 +2564,20 @@ void hfa384x_tx_timeout(struct wlandevice *wlandev)
 /*----------------------------------------------------------------
  * hfa384x_usbctlx_reaper_task
  *
- * Tasklet to delete dead CTLX objects
+ * Deferred work callback to delete dead CTLX objects
  *
  * Arguments:
- *	data	ptr to a struct hfa384x
+ *	work	contains ptr to a struct hfa384x
  *
  * Returns:
  *
  * Call context:
- *	Interrupt
+ *      Task
  *----------------------------------------------------------------
  */
-static void hfa384x_usbctlx_reaper_task(struct tasklet_struct *t)
+static void hfa384x_usbctlx_reaper_task(struct work_struct *work)
 {
-	struct hfa384x *hw = from_tasklet(hw, t, reaper_bh);
+	struct hfa384x *hw = container_of(work, struct hfa384x, reaper_bh);
 	struct hfa384x_usbctlx *ctlx, *temp;
 	unsigned long flags;
 
@@ -2618,21 +2597,21 @@ static void hfa384x_usbctlx_reaper_task(struct tasklet_struct *t)
 /*----------------------------------------------------------------
  * hfa384x_usbctlx_completion_task
  *
- * Tasklet to call completion handlers for returned CTLXs
+ * Deferred work callback to call completion handlers for returned CTLXs
  *
  * Arguments:
- *	data	ptr to struct hfa384x
+ *	work	contains ptr to a struct hfa384x
  *
  * Returns:
  *	Nothing
  *
  * Call context:
- *	Interrupt
+ *      Task
  *----------------------------------------------------------------
  */
-static void hfa384x_usbctlx_completion_task(struct tasklet_struct *t)
+static void hfa384x_usbctlx_completion_task(struct work_struct *work)
 {
-	struct hfa384x *hw = from_tasklet(hw, t, completion_bh);
+	struct hfa384x *hw = container_of(work, struct hfa384x, completion_bh);
 	struct hfa384x_usbctlx *ctlx, *temp;
 	unsigned long flags;
 
@@ -2686,7 +2665,7 @@ static void hfa384x_usbctlx_completion_task(struct tasklet_struct *t)
 	spin_unlock_irqrestore(&hw->ctlxq.lock, flags);
 
 	if (reap)
-		tasklet_schedule(&hw->reaper_bh);
+		schedule_work(&hw->reaper_bh);
 }
 
 /*----------------------------------------------------------------
@@ -2743,7 +2722,7 @@ static int unlocked_usbctlx_cancel_async(struct hfa384x *hw,
  * aren't active and the timers should have been stopped.
  *
  * The CTLX is migrated to the "completing" queue, and the completing
- * tasklet is scheduled.
+ * work is scheduled.
  *
  * Arguments:
  *	hw		ptr to a struct hfa384x structure
@@ -2766,7 +2745,7 @@ static void unlocked_usbctlx_complete(struct hfa384x *hw,
 	 * queue.
 	 */
 	list_move_tail(&ctlx->list, &hw->ctlxq.completing);
-	tasklet_schedule(&hw->completion_bh);
+	schedule_work(&hw->completion_bh);
 
 	switch (ctlx->state) {
 	case CTLX_COMPLETE:
@@ -3778,18 +3757,18 @@ static void hfa384x_usb_throttlefn(struct timer_list *t)
 
 	spin_lock_irqsave(&hw->ctlxq.lock, flags);
 
-	/*
-	 * We need to check BOTH the RX and the TX throttle controls,
-	 * so we use the bitwise OR instead of the logical OR.
-	 */
 	pr_debug("flags=0x%lx\n", hw->usb_flags);
-	if (!hw->wlandev->hwremoved &&
-	    ((test_and_clear_bit(THROTTLE_RX, &hw->usb_flags) &&
-	      !test_and_set_bit(WORK_RX_RESUME, &hw->usb_flags)) |
-	     (test_and_clear_bit(THROTTLE_TX, &hw->usb_flags) &&
-	      !test_and_set_bit(WORK_TX_RESUME, &hw->usb_flags))
-	    )) {
-		schedule_work(&hw->usb_work);
+	if (!hw->wlandev->hwremoved) {
+		bool rx_throttle = test_and_clear_bit(THROTTLE_RX, &hw->usb_flags) &&
+				   !test_and_set_bit(WORK_RX_RESUME, &hw->usb_flags);
+		bool tx_throttle = test_and_clear_bit(THROTTLE_TX, &hw->usb_flags) &&
+				   !test_and_set_bit(WORK_TX_RESUME, &hw->usb_flags);
+		/*
+		 * We need to check BOTH the RX and the TX throttle controls,
+		 * so we use the bitwise OR instead of the logical OR.
+		 */
+		if (rx_throttle | tx_throttle)
+			schedule_work(&hw->usb_work);
 	}
 
 	spin_unlock_irqrestore(&hw->ctlxq.lock, flags);

@@ -103,6 +103,7 @@ struct slimpro_i2c_dev {
 	struct i2c_adapter adapter;
 	struct device *dev;
 	struct mbox_chan *mbox_chan;
+	struct pcc_mbox_chan *pcc_chan;
 	struct mbox_client mbox_client;
 	int mbox_idx;
 	struct completion rd_complete;
@@ -307,6 +308,9 @@ static int slimpro_i2c_blkwr(struct slimpro_i2c_dev *ctx, u32 chip,
 	u32 msg[3];
 	int rc;
 
+	if (writelen > I2C_SMBUS_BLOCK_MAX)
+		return -EINVAL;
+
 	memcpy(ctx->dma_buffer, data, writelen);
 	paddr = dma_map_single(ctx->dev, ctx->dma_buffer, writelen,
 			       DMA_TO_DEVICE);
@@ -466,7 +470,7 @@ static int xgene_slimpro_i2c_probe(struct platform_device *pdev)
 			return PTR_ERR(ctx->mbox_chan);
 		}
 	} else {
-		struct acpi_pcct_hw_reduced *cppc_ss;
+		struct pcc_mbox_chan *pcc_chan;
 		const struct acpi_device_id *acpi_id;
 		int version = XGENE_SLIMPRO_I2C_V1;
 
@@ -483,24 +487,14 @@ static int xgene_slimpro_i2c_probe(struct platform_device *pdev)
 
 		cl->tx_block = false;
 		cl->rx_callback = slimpro_i2c_pcc_rx_cb;
-		ctx->mbox_chan = pcc_mbox_request_channel(cl, ctx->mbox_idx);
-		if (IS_ERR(ctx->mbox_chan)) {
+		pcc_chan = pcc_mbox_request_channel(cl, ctx->mbox_idx);
+		if (IS_ERR(pcc_chan)) {
 			dev_err(&pdev->dev, "PCC mailbox channel request failed\n");
-			return PTR_ERR(ctx->mbox_chan);
+			return PTR_ERR(pcc_chan);
 		}
 
-		/*
-		 * The PCC mailbox controller driver should
-		 * have parsed the PCCT (global table of all
-		 * PCC channels) and stored pointers to the
-		 * subspace communication region in con_priv.
-		 */
-		cppc_ss = ctx->mbox_chan->con_priv;
-		if (!cppc_ss) {
-			dev_err(&pdev->dev, "PPC subspace not found\n");
-			rc = -ENOENT;
-			goto mbox_err;
-		}
+		ctx->pcc_chan = pcc_chan;
+		ctx->mbox_chan = pcc_chan->mchan;
 
 		if (!ctx->mbox_chan->mbox->txdone_irq) {
 			dev_err(&pdev->dev, "PCC IRQ not supported\n");
@@ -512,17 +506,17 @@ static int xgene_slimpro_i2c_probe(struct platform_device *pdev)
 		 * This is the shared communication region
 		 * for the OS and Platform to communicate over.
 		 */
-		ctx->comm_base_addr = cppc_ss->base_address;
+		ctx->comm_base_addr = pcc_chan->shmem_base_addr;
 		if (ctx->comm_base_addr) {
 			if (version == XGENE_SLIMPRO_I2C_V2)
 				ctx->pcc_comm_addr = memremap(
 							ctx->comm_base_addr,
-							cppc_ss->length,
+							pcc_chan->shmem_size,
 							MEMREMAP_WT);
 			else
 				ctx->pcc_comm_addr = memremap(
 							ctx->comm_base_addr,
-							cppc_ss->length,
+							pcc_chan->shmem_size,
 							MEMREMAP_WB);
 		} else {
 			dev_err(&pdev->dev, "Failed to get PCC comm region\n");
@@ -561,12 +555,12 @@ mbox_err:
 	if (acpi_disabled)
 		mbox_free_channel(ctx->mbox_chan);
 	else
-		pcc_mbox_free_channel(ctx->mbox_chan);
+		pcc_mbox_free_channel(ctx->pcc_chan);
 
 	return rc;
 }
 
-static int xgene_slimpro_i2c_remove(struct platform_device *pdev)
+static void xgene_slimpro_i2c_remove(struct platform_device *pdev)
 {
 	struct slimpro_i2c_dev *ctx = platform_get_drvdata(pdev);
 
@@ -575,9 +569,7 @@ static int xgene_slimpro_i2c_remove(struct platform_device *pdev)
 	if (acpi_disabled)
 		mbox_free_channel(ctx->mbox_chan);
 	else
-		pcc_mbox_free_channel(ctx->mbox_chan);
-
-	return 0;
+		pcc_mbox_free_channel(ctx->pcc_chan);
 }
 
 static const struct of_device_id xgene_slimpro_i2c_dt_ids[] = {
@@ -597,7 +589,7 @@ MODULE_DEVICE_TABLE(acpi, xgene_slimpro_i2c_acpi_ids);
 
 static struct platform_driver xgene_slimpro_i2c_driver = {
 	.probe	= xgene_slimpro_i2c_probe,
-	.remove	= xgene_slimpro_i2c_remove,
+	.remove_new = xgene_slimpro_i2c_remove,
 	.driver	= {
 		.name	= "xgene-slimpro-i2c",
 		.of_match_table = of_match_ptr(xgene_slimpro_i2c_dt_ids),

@@ -466,8 +466,9 @@ static const struct iio_buffer_setup_ops ina260_setup_ops = {
 	.predisable = &ina260_buffer_disable,
 };
 
-static int ina260_probe(struct i2c_client *client, const struct i2c_device_id *id)
+static int ina260_probe(struct i2c_client *client)
 {
+	const struct i2c_device_id *id = i2c_client_get_device_id(client);
 	struct iio_dev *indio_dev;
 	struct ina260_chip *chip;
 	enum ina260_ids type = 0;
@@ -505,7 +506,6 @@ static int ina260_probe(struct i2c_client *client, const struct i2c_device_id *i
 	indio_dev->name = id->name;
 
 	ret = devm_iio_kfifo_buffer_setup(&indio_dev->dev, indio_dev,
-					  INDIO_BUFFER_SOFTWARE,
 					  &ina260_setup_ops);
 	if (ret)
 		return ret;
@@ -513,14 +513,18 @@ static int ina260_probe(struct i2c_client *client, const struct i2c_device_id *i
 	return iio_device_register(indio_dev);
 }
 
-static int ina260_remove(struct i2c_client *client)
+static void ina260_remove(struct i2c_client *client)
 {
 	struct iio_dev *indio_dev = i2c_get_clientdata(client);
 	struct ina260_chip *chip = iio_priv(indio_dev);
+	int ret;
 
 	iio_device_unregister(indio_dev);
 	/* Power down */
-	return regmap_update_bits(chip->regmap, INA260_CONFIG, INA260_MODE_MASK, 0);
+	ret = regmap_update_bits(chip->regmap, INA260_CONFIG, INA260_MODE_MASK, 0);
+	if (ret)
+		dev_warn(&client->dev, "Failed to power down device (%pe)\n",
+			 ERR_PTR(ret));
 }
 
 static const struct i2c_device_id ina260_id[] = {
@@ -551,4 +555,4 @@ module_i2c_driver(ina260_driver);
 
 MODULE_AUTHOR("Raviteja Narayanam <raviteja.narayanam@xilinx.com>");
 MODULE_DESCRIPTION("Texas Instruments INA 260 ADC driver");
-MODULE_LICENSE("GPL v2");
+MODULE_LICENSE("GPL");

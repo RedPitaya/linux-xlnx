@@ -34,6 +34,7 @@ static int run_dir(const char *d)
 	struct dso *dso;
 	struct symbol *sym;
 	int ret;
+	size_t idx;
 
 	scnprintf(filename, PATH_MAX, "%s/pe-file.exe", d);
 	ret = filename__read_build_id(filename, &bid);
@@ -61,14 +62,14 @@ static int run_dir(const char *d)
 	TEST_ASSERT_VAL("Failed to load symbols", ret == 0);
 
 	dso__sort_by_name(dso);
-	sym = dso__find_symbol_by_name(dso, "main");
+	sym = dso__find_symbol_by_name(dso, "main", &idx);
 	TEST_ASSERT_VAL("Failed to find main", sym);
 	dso__delete(dso);
 
 	return TEST_OK;
 }
 
-int test__pe_file_parsing(struct test *test __maybe_unused,
+static int test__pe_file_parsing(struct test_suite *test __maybe_unused,
 			  int subtest __maybe_unused)
 {
 	struct stat st;
@@ -89,10 +90,12 @@ int test__pe_file_parsing(struct test *test __maybe_unused,
 
 #else
 
-int test__pe_file_parsing(struct test *test __maybe_unused,
+static int test__pe_file_parsing(struct test_suite *test __maybe_unused,
 			  int subtest __maybe_unused)
 {
 	return TEST_SKIP;
 }
 
 #endif
+
+DEFINE_SUITE("PE file support", pe_file_parsing);

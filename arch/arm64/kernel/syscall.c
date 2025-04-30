@@ -8,7 +8,6 @@
 #include <linux/randomize_kstack.h>
 #include <linux/syscalls.h>
 
-#include <asm/daifflags.h>
 #include <asm/debug-monitors.h>
 #include <asm/exception.h>
 #include <asm/fpsimd.h>
@@ -67,7 +66,7 @@ static void invoke_syscall(struct pt_regs *regs, unsigned int scno,
 	 *
 	 * The resulting 5 bits of entropy is seen in SP[8:4].
 	 */
-	choose_random_kstack_offset(get_random_int() & 0x1FF);
+	choose_random_kstack_offset(get_random_u16() & 0x1FF);
 }
 
 static inline bool has_syscall_work(unsigned long flags)
@@ -75,13 +74,10 @@ static inline bool has_syscall_work(unsigned long flags)
 	return unlikely(flags & _TIF_SYSCALL_WORK);
 }
 
-int syscall_trace_enter(struct pt_regs *regs);
-void syscall_trace_exit(struct pt_regs *regs);
-
 static void el0_svc_common(struct pt_regs *regs, int scno, int sc_nr,
 			   const syscall_fn_t syscall_table[])
 {
-	unsigned long flags = current_thread_info()->flags;
+	unsigned long flags = read_thread_flags();
 
 	regs->orig_x0 = regs->regs[0];
 	regs->syscallno = scno;
@@ -103,8 +99,6 @@ static void el0_svc_common(struct pt_regs *regs, int scno, int sc_nr,
 	 * So, don't touch regs->pstate & PSR_BTYPE_MASK here.
 	 * (Similarly for HVC and SMC elsewhere.)
 	 */
-
-	local_daif_restore(DAIF_PROCCTX);
 
 	if (flags & _TIF_MTE_ASYNC_FAULT) {
 		/*
@@ -147,37 +141,17 @@ static void el0_svc_common(struct pt_regs *regs, int scno, int sc_nr,
 	 * exit regardless, as the old entry assembly did.
 	 */
 	if (!has_syscall_work(flags) && !IS_ENABLED(CONFIG_DEBUG_RSEQ)) {
-		local_daif_mask();
-		flags = current_thread_info()->flags;
+		flags = read_thread_flags();
 		if (!has_syscall_work(flags) && !(flags & _TIF_SINGLESTEP))
 			return;
-		local_daif_restore(DAIF_PROCCTX);
 	}
 
 trace_exit:
 	syscall_trace_exit(regs);
 }
 
-static inline void sve_user_discard(void)
-{
-	if (!system_supports_sve())
-		return;
-
-	clear_thread_flag(TIF_SVE);
-
-	/*
-	 * task_fpsimd_load() won't be called to update CPACR_EL1 in
-	 * ret_to_user unless TIF_FOREIGN_FPSTATE is still set, which only
-	 * happens if a context switch or kernel_neon_begin() or context
-	 * modification (sigreturn, ptrace) intervenes.
-	 * So, ensure that CPACR_EL1 is already correct for the fast-path case.
-	 */
-	sve_user_disable();
-}
-
 void do_el0_svc(struct pt_regs *regs)
 {
-	sve_user_discard();
 	el0_svc_common(regs, regs->regs[8], __NR_syscalls, sys_call_table);
 }
 

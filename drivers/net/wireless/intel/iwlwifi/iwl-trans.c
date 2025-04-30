@@ -2,7 +2,7 @@
 /*
  * Copyright (C) 2015 Intel Mobile Communications GmbH
  * Copyright (C) 2016-2017 Intel Deutschland GmbH
- * Copyright (C) 2019-2021 Intel Corporation
+ * Copyright (C) 2019-2021, 2023 Intel Corporation
  */
 #include <linux/kernel.h>
 #include <linux/bsearch.h>
@@ -42,7 +42,7 @@ struct iwl_trans *iwl_trans_alloc(unsigned int priv_size,
 
 	WARN_ON(!ops->wait_txq_empty && !ops->wait_tx_queues_empty);
 
-	if (trans->trans_cfg->use_tfh) {
+	if (trans->trans_cfg->gen2) {
 		trans->txqs.tfd.addr_size = 64;
 		trans->txqs.tfd.max_tbs = IWL_TFH_NUM_TBS;
 		trans->txqs.tfd.size = sizeof(struct iwl_tfh_tfd);
@@ -78,8 +78,12 @@ int iwl_trans_init(struct iwl_trans *trans)
 	if (WARN_ON(trans->trans_cfg->gen2 && txcmd_size >= txcmd_align))
 		return -EINVAL;
 
-	if (trans->trans_cfg->device_family >= IWL_DEVICE_FAMILY_AX210)
-		trans->txqs.bc_tbl_size = sizeof(struct iwl_gen3_bc_tbl);
+	if (trans->trans_cfg->device_family >= IWL_DEVICE_FAMILY_BZ)
+		trans->txqs.bc_tbl_size =
+			sizeof(struct iwl_gen3_bc_tbl_entry) * TFD_QUEUE_BC_SIZE_GEN3_BZ;
+	else if (trans->trans_cfg->device_family >= IWL_DEVICE_FAMILY_AX210)
+		trans->txqs.bc_tbl_size =
+			sizeof(struct iwl_gen3_bc_tbl_entry) * TFD_QUEUE_BC_SIZE_GEN3_AX210;
 	else
 		trans->txqs.bc_tbl_size = sizeof(struct iwlagn_scd_bc_tbl);
 	/*
@@ -97,7 +101,7 @@ int iwl_trans_init(struct iwl_trans *trans)
 
 	/* Some things must not change even if the config does */
 	WARN_ON(trans->txqs.tfd.addr_size !=
-		(trans->trans_cfg->use_tfh ? 64 : 36));
+		(trans->trans_cfg->gen2 ? 64 : 36));
 
 	snprintf(trans->dev_cmd_pool_name, sizeof(trans->dev_cmd_pool_name),
 		 "iwl_cmd_pool:%s", dev_name(trans->dev));
@@ -203,10 +207,10 @@ IWL_EXPORT_SYMBOL(iwl_trans_send_cmd);
 static int iwl_hcmd_names_cmp(const void *key, const void *elt)
 {
 	const struct iwl_hcmd_names *name = elt;
-	u8 cmd1 = *(u8 *)key;
+	const u8 *cmd1 = key;
 	u8 cmd2 = name->cmd_id;
 
-	return (cmd1 - cmd2);
+	return (*cmd1 - cmd2);
 }
 
 const char *iwl_get_cmd_string(struct iwl_trans *trans, u32 id)

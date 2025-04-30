@@ -54,7 +54,6 @@
 #include <linux/netdevice.h>
 #include <linux/etherdevice.h>
 #include <linux/of.h>
-#include <linux/of_device.h>
 #include <linux/platform_device.h>
 #include <linux/kernel.h>
 #include <linux/types.h>
@@ -71,6 +70,8 @@
 #include <linux/delay.h>
 #include <linux/gfp.h>
 #include <linux/io.h>
+
+#include <net/Space.h>
 
 #include <asm/irq.h>
 #include <linux/atomic.h>
@@ -985,7 +986,7 @@ release_irq:
 		if (result == DETECTED_NONE) {
 			pr_warn("%s: 10Base-5 (AUI) has no cable\n", dev->name);
 			if (lp->auto_neg_cnf & IMM_BIT) /* check "ignore missing media" bit */
-				result = DETECTED_AUI; /* Yes! I don't care if I see a carrrier */
+				result = DETECTED_AUI; /* Yes! I don't care if I see a carrier */
 		}
 		break;
 	case A_CNF_MEDIA_10B_2:
@@ -1227,7 +1228,7 @@ static int set_mac_address(struct net_device *dev, void *p)
 	if (netif_running(dev))
 		return -EBUSY;
 
-	memcpy(dev->dev_addr, addr->sa_data, dev->addr_len);
+	eth_hw_addr_set(dev, addr->sa_data);
 
 	cs89_dbg(0, debug, "%s: Setting MAC address to %pM\n",
 		 dev->name, dev->dev_addr);
@@ -1314,6 +1315,7 @@ cs89x0_probe1(struct net_device *dev, void __iomem *ioaddr, int modular)
 	int tmp;
 	unsigned rev_type = 0;
 	int eeprom_buff[CHKSUM_LEN];
+	u8 addr[ETH_ALEN];
 	int retval;
 
 	/* Initialize the device structure. */
@@ -1387,9 +1389,10 @@ cs89x0_probe1(struct net_device *dev, void __iomem *ioaddr, int modular)
 		for (i = 0; i < ETH_ALEN / 2; i++) {
 			unsigned int Addr;
 			Addr = readreg(dev, PP_IA + i * 2);
-			dev->dev_addr[i * 2] = Addr & 0xFF;
-			dev->dev_addr[i * 2 + 1] = Addr >> 8;
+			addr[i * 2] = Addr & 0xFF;
+			addr[i * 2 + 1] = Addr >> 8;
 		}
+		eth_hw_addr_set(dev, addr);
 
 		/* Load the Adapter Configuration.
 		 * Note:  Barring any more specific information from some
@@ -1464,9 +1467,10 @@ cs89x0_probe1(struct net_device *dev, void __iomem *ioaddr, int modular)
 		/* eeprom_buff has 32-bit ints, so we can't just memcpy it */
 		/* store the initial memory base address */
 		for (i = 0; i < ETH_ALEN / 2; i++) {
-			dev->dev_addr[i * 2] = eeprom_buff[i];
-			dev->dev_addr[i * 2 + 1] = eeprom_buff[i] >> 8;
+			addr[i * 2] = eeprom_buff[i];
+			addr[i * 2 + 1] = eeprom_buff[i] >> 8;
 		}
+		eth_hw_addr_set(dev, addr);
 		cs89_dbg(1, debug, "%s: new adapter_cnf: 0x%x\n",
 			 dev->name, lp->adapter_cnf);
 	}
@@ -1850,9 +1854,8 @@ static int __init cs89x0_platform_probe(struct platform_device *pdev)
 		return -ENOMEM;
 
 	dev->irq = platform_get_irq(pdev, 0);
-	if (dev->irq <= 0) {
-		dev_warn(&dev->dev, "interrupt resource missing\n");
-		err = -ENXIO;
+	if (dev->irq < 0) {
+		err = dev->irq;
 		goto free;
 	}
 

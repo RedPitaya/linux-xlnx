@@ -4,7 +4,7 @@
  *
  * (C) Copyright 2019, Xilinx, Inc.
  *
- * Michal Simek <michal.simek@xilinx.com>
+ * Michal Simek <michal.simek@amd.com>
  */
 
 #include "versal-vc-p-a2197-00-revA.dts"
@@ -18,7 +18,7 @@
 	model = "Xilinx Versal A2197 Processor board revA - x-prc-05 revA";
 
 	chosen {
-		bootargs = "console=ttyAMA0 earlycon=pl011,mmio32,0xFF000000,115200n8 clk_ignore_unused";
+		bootargs = "console=ttyAMA0 earlycon=pl011,mmio32,0xFF000000,115200n8";
 		stdout-path = "serial0:115200";
 	};
 
@@ -38,13 +38,17 @@
 	status = "okay";
 	phy-handle = <&phy1>;
 	phy-mode = "rgmii-id";
-	phy1: phy@1 { /* 88e1510 */
-		reg = <1>;
-	};
-	phy2: phy@2 { /* VSC8531 */
-		reg = <2>;
-		vsc8531,rx-delay = <VSC8531_RGMII_CLK_DELAY_2_6_NS>;
-		vsc8531,tx-delay = <VSC8531_RGMII_CLK_DELAY_2_6_NS>;
+	mdio: mdio {
+		#address-cells = <1>;
+		#size-cells = <0>;
+		phy1: phy@1 { /* 88e1510 */
+			reg = <1>;
+		};
+		phy2: phy@2 { /* VSC8531 */
+			reg = <2>;
+			rx-internal-delay-ps = <2600>;
+			tx-internal-delay-ps = <2600>;
+		};
 	};
 };
 
@@ -96,6 +100,9 @@
 	status = "okay";
 	non-removable;
 	disable-wp;
+	no-sd;
+	no-sdio;
+	cap-mmc-hw-reset;
 	bus-width = <8>;
 	xlnx,mio-bank = <0>; /* FIXME */
 };
@@ -111,8 +118,6 @@
 
 &usb0 {
 	status = "okay";
-	xlnx,usb-polarity = <0>;
-	xlnx,usb-reset-mode = <0>;
 };
 
 &dwc3_0 { /* USB 2.0 host */

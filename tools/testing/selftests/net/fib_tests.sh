@@ -9,13 +9,17 @@ ret=0
 ksft_skip=4
 
 # all tests in this script. Can be overridden with -t option
-TESTS="unregister down carrier nexthop suppress ipv6_rt ipv4_rt ipv6_addr_metric ipv4_addr_metric ipv6_route_metrics ipv4_route_metrics ipv4_route_v6_gw rp_filter ipv4_del_addr ipv4_mangle ipv6_mangle"
+TESTS="unregister down carrier nexthop suppress ipv6_notify ipv4_notify \
+       ipv6_rt ipv4_rt ipv6_addr_metric ipv4_addr_metric ipv6_route_metrics \
+       ipv4_route_metrics ipv4_route_v6_gw rp_filter ipv4_del_addr \
+       ipv6_del_addr ipv4_mangle ipv6_mangle ipv4_bcast_neigh fib6_gc_test \
+       ipv4_mpath_list ipv6_mpath_list"
 
 VERBOSE=0
 PAUSE_ON_FAIL=no
 PAUSE=no
-IP="ip -netns ns1"
-NS_EXEC="ip netns exec ns1"
+IP="$(which ip) -netns ns1"
+NS_EXEC="$(which ip) netns exec ns1"
 
 which ping6 > /dev/null 2>&1 && ping6=$(which ping6) || ping6=$(which ping)
 
@@ -68,7 +72,7 @@ setup()
 cleanup()
 {
 	$IP link del dev dummy0 &> /dev/null
-	ip netns del ns1
+	ip netns del ns1 &> /dev/null
 	ip netns del ns2 &> /dev/null
 }
 
@@ -444,24 +448,63 @@ fib_rp_filter_test()
 	setup
 
 	set -e
+	ip netns add ns2
+	ip netns set ns2 auto
+
+	ip -netns ns2 link set dev lo up
+
+	$IP link add name veth1 type veth peer name veth2
+	$IP link set dev veth2 netns ns2
+	$IP address add 192.0.2.1/24 dev veth1
+	ip -netns ns2 address add 192.0.2.1/24 dev veth2
+	$IP link set dev veth1 up
+	ip -netns ns2 link set dev veth2 up
+
 	$IP link set dev lo address 52:54:00:6a:c7:5e
-	$IP link set dummy0 address 52:54:00:6a:c7:5e
-	$IP link add dummy1 type dummy
-	$IP link set dummy1 address 52:54:00:6a:c7:5e
-	$IP link set dev dummy1 up
+	$IP link set dev veth1 address 52:54:00:6a:c7:5e
+	ip -netns ns2 link set dev lo address 52:54:00:6a:c7:5e
+	ip -netns ns2 link set dev veth2 address 52:54:00:6a:c7:5e
+
+	# 1. (ns2) redirect lo's egress to veth2's egress
+	ip netns exec ns2 tc qdisc add dev lo parent root handle 1: fq_codel
+	ip netns exec ns2 tc filter add dev lo parent 1: protocol arp basic \
+		action mirred egress redirect dev veth2
+	ip netns exec ns2 tc filter add dev lo parent 1: protocol ip basic \
+		action mirred egress redirect dev veth2
+
+	# 2. (ns1) redirect veth1's ingress to lo's ingress
+	$NS_EXEC tc qdisc add dev veth1 ingress
+	$NS_EXEC tc filter add dev veth1 ingress protocol arp basic \
+		action mirred ingress redirect dev lo
+	$NS_EXEC tc filter add dev veth1 ingress protocol ip basic \
+		action mirred ingress redirect dev lo
+
+	# 3. (ns1) redirect lo's egress to veth1's egress
+	$NS_EXEC tc qdisc add dev lo parent root handle 1: fq_codel
+	$NS_EXEC tc filter add dev lo parent 1: protocol arp basic \
+		action mirred egress redirect dev veth1
+	$NS_EXEC tc filter add dev lo parent 1: protocol ip basic \
+		action mirred egress redirect dev veth1
+
+	# 4. (ns2) redirect veth2's ingress to lo's ingress
+	ip netns exec ns2 tc qdisc add dev veth2 ingress
+	ip netns exec ns2 tc filter add dev veth2 ingress protocol arp basic \
+		action mirred ingress redirect dev lo
+	ip netns exec ns2 tc filter add dev veth2 ingress protocol ip basic \
+		action mirred ingress redirect dev lo
+
 	$NS_EXEC sysctl -qw net.ipv4.conf.all.rp_filter=1
 	$NS_EXEC sysctl -qw net.ipv4.conf.all.accept_local=1
 	$NS_EXEC sysctl -qw net.ipv4.conf.all.route_localnet=1
-
-	$NS_EXEC tc qd add dev dummy1 parent root handle 1: fq_codel
-	$NS_EXEC tc filter add dev dummy1 parent 1: protocol arp basic action mirred egress redirect dev lo
-	$NS_EXEC tc filter add dev dummy1 parent 1: protocol ip basic action mirred egress redirect dev lo
+	ip netns exec ns2 sysctl -qw net.ipv4.conf.all.rp_filter=1
+	ip netns exec ns2 sysctl -qw net.ipv4.conf.all.accept_local=1
+	ip netns exec ns2 sysctl -qw net.ipv4.conf.all.route_localnet=1
 	set +e
 
-	run_cmd "ip netns exec ns1 ping -I dummy1 -w1 -c1 198.51.100.1"
+	run_cmd "ip netns exec ns2 ping -w1 -c1 192.0.2.1"
 	log_test $? 0 "rp_filter passes local packets"
 
-	run_cmd "ip netns exec ns1 ping -I dummy1 -w1 -c1 127.0.0.1"
+	run_cmd "ip netns exec ns2 ping -w1 -c1 127.0.0.1"
 	log_test $? 0 "rp_filter passes loopback packets"
 
 	cleanup
@@ -614,6 +657,160 @@ fib_nexthop_test()
 	$IP link del red
 	) 2>/dev/null
 	cleanup
+}
+
+fib6_notify_test()
+{
+	setup
+
+	echo
+	echo "Fib6 info length calculation in route notify test"
+	set -e
+
+	for i in 10 20 30 40 50 60 70;
+	do
+		$IP link add dummy_$i type dummy
+		$IP link set dev dummy_$i up
+		$IP -6 address add 2001:$i::1/64 dev dummy_$i
+	done
+
+	$NS_EXEC ip monitor route &> errors.txt &
+	sleep 2
+
+	$IP -6 route add 2001::/64 \
+                nexthop via 2001:10::2 dev dummy_10 \
+                nexthop encap ip6 dst 2002::20 via 2001:20::2 dev dummy_20 \
+                nexthop encap ip6 dst 2002::30 via 2001:30::2 dev dummy_30 \
+                nexthop encap ip6 dst 2002::40 via 2001:40::2 dev dummy_40 \
+                nexthop encap ip6 dst 2002::50 via 2001:50::2 dev dummy_50 \
+                nexthop encap ip6 dst 2002::60 via 2001:60::2 dev dummy_60 \
+                nexthop encap ip6 dst 2002::70 via 2001:70::2 dev dummy_70
+
+	set +e
+
+	err=`cat errors.txt |grep "Message too long"`
+	if [ -z "$err" ];then
+		ret=0
+	else
+		ret=1
+	fi
+
+	log_test $ret 0 "ipv6 route add notify"
+
+	{ kill %% && wait %%; } 2>/dev/null
+
+	#rm errors.txt
+
+	cleanup &> /dev/null
+}
+
+
+fib_notify_test()
+{
+	setup
+
+	echo
+	echo "Fib4 info length calculation in route notify test"
+
+	set -e
+
+	for i in 10 20 30 40 50 60 70;
+	do
+		$IP link add dummy_$i type dummy
+		$IP link set dev dummy_$i up
+		$IP address add 20.20.$i.2/24 dev dummy_$i
+	done
+
+	$NS_EXEC ip monitor route &> errors.txt &
+	sleep 2
+
+        $IP route add 10.0.0.0/24 \
+                nexthop via 20.20.10.1 dev dummy_10 \
+                nexthop encap ip dst 192.168.10.20 via 20.20.20.1 dev dummy_20 \
+                nexthop encap ip dst 192.168.10.30 via 20.20.30.1 dev dummy_30 \
+                nexthop encap ip dst 192.168.10.40 via 20.20.40.1 dev dummy_40 \
+                nexthop encap ip dst 192.168.10.50 via 20.20.50.1 dev dummy_50 \
+                nexthop encap ip dst 192.168.10.60 via 20.20.60.1 dev dummy_60 \
+                nexthop encap ip dst 192.168.10.70 via 20.20.70.1 dev dummy_70
+
+	set +e
+
+	err=`cat errors.txt |grep "Message too long"`
+	if [ -z "$err" ];then
+		ret=0
+	else
+		ret=1
+	fi
+
+	log_test $ret 0 "ipv4 route add notify"
+
+	{ kill %% && wait %%; } 2>/dev/null
+
+	rm  errors.txt
+
+	cleanup &> /dev/null
+}
+
+fib6_gc_test()
+{
+	setup
+
+	echo
+	echo "Fib6 garbage collection test"
+	set -e
+
+	EXPIRE=3
+
+	# Check expiration of routes every $EXPIRE seconds (GC)
+	$NS_EXEC sysctl -wq net.ipv6.route.gc_interval=$EXPIRE
+
+	$IP link add dummy_10 type dummy
+	$IP link set dev dummy_10 up
+	$IP -6 address add 2001:10::1/64 dev dummy_10
+
+	$NS_EXEC sysctl -wq net.ipv6.route.flush=1
+
+	# Temporary routes
+	for i in $(seq 1 1000); do
+	    # Expire route after $EXPIRE seconds
+	    $IP -6 route add 2001:20::$i \
+		via 2001:10::2 dev dummy_10 expires $EXPIRE
+	done
+	sleep $(($EXPIRE * 2))
+	N_EXP_SLEEP=$($IP -6 route list |grep expires|wc -l)
+	if [ $N_EXP_SLEEP -ne 0 ]; then
+	    echo "FAIL: expected 0 routes with expires, got $N_EXP_SLEEP"
+	    ret=1
+	else
+	    ret=0
+	fi
+
+	# Permanent routes
+	for i in $(seq 1 5000); do
+	    $IP -6 route add 2001:30::$i \
+		via 2001:10::2 dev dummy_10
+	done
+	# Temporary routes
+	for i in $(seq 1 1000); do
+	    # Expire route after $EXPIRE seconds
+	    $IP -6 route add 2001:20::$i \
+		via 2001:10::2 dev dummy_10 expires $EXPIRE
+	done
+	sleep $(($EXPIRE * 2))
+	N_EXP_SLEEP=$($IP -6 route list |grep expires|wc -l)
+	if [ $N_EXP_SLEEP -ne 0 ]; then
+	    echo "FAIL: expected 0 routes with expires," \
+		 "got $N_EXP_SLEEP (5000 permanent routes)"
+	    ret=1
+	else
+	    ret=0
+	fi
+
+	set +e
+
+	log_test $ret 0 "ipv6 route garbage collection"
+
+	cleanup &> /dev/null
 }
 
 fib_suppress_test()
@@ -949,12 +1146,25 @@ ipv6_rt_replace()
 	ipv6_rt_replace_mpath
 }
 
+ipv6_rt_dsfield()
+{
+	echo
+	echo "IPv6 route with dsfield tests"
+
+	run_cmd "$IP -6 route flush 2001:db8:102::/64"
+
+	# IPv6 doesn't support routing based on dsfield
+	run_cmd "$IP -6 route add 2001:db8:102::/64 dsfield 0x04 via 2001:db8:101::2"
+	log_test $? 2 "Reject route with dsfield"
+}
+
 ipv6_route_test()
 {
 	route_setup
 
 	ipv6_rt_add
 	ipv6_rt_replace
+	ipv6_rt_dsfield
 
 	route_cleanup
 }
@@ -1408,6 +1618,81 @@ ipv4_local_rt_cache()
 	log_test $? 0 "Cached route removed from VRF port device"
 }
 
+ipv4_rt_dsfield()
+{
+	echo
+	echo "IPv4 route with dsfield tests"
+
+	run_cmd "$IP route flush 172.16.102.0/24"
+
+	# New routes should reject dsfield options that interfere with ECN
+	run_cmd "$IP route add 172.16.102.0/24 dsfield 0x01 via 172.16.101.2"
+	log_test $? 2 "Reject route with dsfield 0x01"
+
+	run_cmd "$IP route add 172.16.102.0/24 dsfield 0x02 via 172.16.101.2"
+	log_test $? 2 "Reject route with dsfield 0x02"
+
+	run_cmd "$IP route add 172.16.102.0/24 dsfield 0x03 via 172.16.101.2"
+	log_test $? 2 "Reject route with dsfield 0x03"
+
+	# A generic route that doesn't take DSCP into account
+	run_cmd "$IP route add 172.16.102.0/24 via 172.16.101.2"
+
+	# A more specific route for DSCP 0x10
+	run_cmd "$IP route add 172.16.102.0/24 dsfield 0x10 via 172.16.103.2"
+
+	# DSCP 0x10 should match the specific route, no matter the ECN bits
+	$IP route get fibmatch 172.16.102.1 dsfield 0x10 | \
+		grep -q "via 172.16.103.2"
+	log_test $? 0 "IPv4 route with DSCP and ECN:Not-ECT"
+
+	$IP route get fibmatch 172.16.102.1 dsfield 0x11 | \
+		grep -q "via 172.16.103.2"
+	log_test $? 0 "IPv4 route with DSCP and ECN:ECT(1)"
+
+	$IP route get fibmatch 172.16.102.1 dsfield 0x12 | \
+		grep -q "via 172.16.103.2"
+	log_test $? 0 "IPv4 route with DSCP and ECN:ECT(0)"
+
+	$IP route get fibmatch 172.16.102.1 dsfield 0x13 | \
+		grep -q "via 172.16.103.2"
+	log_test $? 0 "IPv4 route with DSCP and ECN:CE"
+
+	# Unknown DSCP should match the generic route, no matter the ECN bits
+	$IP route get fibmatch 172.16.102.1 dsfield 0x14 | \
+		grep -q "via 172.16.101.2"
+	log_test $? 0 "IPv4 route with unknown DSCP and ECN:Not-ECT"
+
+	$IP route get fibmatch 172.16.102.1 dsfield 0x15 | \
+		grep -q "via 172.16.101.2"
+	log_test $? 0 "IPv4 route with unknown DSCP and ECN:ECT(1)"
+
+	$IP route get fibmatch 172.16.102.1 dsfield 0x16 | \
+		grep -q "via 172.16.101.2"
+	log_test $? 0 "IPv4 route with unknown DSCP and ECN:ECT(0)"
+
+	$IP route get fibmatch 172.16.102.1 dsfield 0x17 | \
+		grep -q "via 172.16.101.2"
+	log_test $? 0 "IPv4 route with unknown DSCP and ECN:CE"
+
+	# Null DSCP should match the generic route, no matter the ECN bits
+	$IP route get fibmatch 172.16.102.1 dsfield 0x00 | \
+		grep -q "via 172.16.101.2"
+	log_test $? 0 "IPv4 route with no DSCP and ECN:Not-ECT"
+
+	$IP route get fibmatch 172.16.102.1 dsfield 0x01 | \
+		grep -q "via 172.16.101.2"
+	log_test $? 0 "IPv4 route with no DSCP and ECN:ECT(1)"
+
+	$IP route get fibmatch 172.16.102.1 dsfield 0x02 | \
+		grep -q "via 172.16.101.2"
+	log_test $? 0 "IPv4 route with no DSCP and ECN:ECT(0)"
+
+	$IP route get fibmatch 172.16.102.1 dsfield 0x03 | \
+		grep -q "via 172.16.101.2"
+	log_test $? 0 "IPv4 route with no DSCP and ECN:CE"
+}
+
 ipv4_route_test()
 {
 	route_setup
@@ -1415,6 +1700,7 @@ ipv4_route_test()
 	ipv4_rt_add
 	ipv4_rt_replace
 	ipv4_local_rt_cache
+	ipv4_rt_dsfield
 
 	route_cleanup
 }
@@ -1583,13 +1869,21 @@ ipv4_del_addr_test()
 
 	$IP addr add dev dummy1 172.16.104.1/24
 	$IP addr add dev dummy1 172.16.104.11/24
+	$IP addr add dev dummy1 172.16.104.12/24
+	$IP addr add dev dummy1 172.16.104.13/24
 	$IP addr add dev dummy2 172.16.104.1/24
 	$IP addr add dev dummy2 172.16.104.11/24
+	$IP addr add dev dummy2 172.16.104.12/24
 	$IP route add 172.16.105.0/24 via 172.16.104.2 src 172.16.104.11
+	$IP route add 172.16.106.0/24 dev lo src 172.16.104.12
+	$IP route add table 0 172.16.107.0/24 via 172.16.104.2 src 172.16.104.13
 	$IP route add vrf red 172.16.105.0/24 via 172.16.104.2 src 172.16.104.11
+	$IP route add vrf red 172.16.106.0/24 dev lo src 172.16.104.12
 	set +e
 
 	# removing address from device in vrf should only remove route from vrf table
+	echo "    Regular FIB info"
+
 	$IP addr del dev dummy2 172.16.104.11/24
 	$IP ro ls vrf red | grep -q 172.16.105.0/24
 	log_test $? 1 "Route removed from VRF when source address deleted"
@@ -1607,11 +1901,189 @@ ipv4_del_addr_test()
 	$IP ro ls vrf red | grep -q 172.16.105.0/24
 	log_test $? 0 "Route in VRF is not removed by address delete"
 
+	# removing address from device in vrf should only remove route from vrf
+	# table even when the associated fib info only differs in table ID
+	echo "    Identical FIB info with different table ID"
+
+	$IP addr del dev dummy2 172.16.104.12/24
+	$IP ro ls vrf red | grep -q 172.16.106.0/24
+	log_test $? 1 "Route removed from VRF when source address deleted"
+
+	$IP ro ls | grep -q 172.16.106.0/24
+	log_test $? 0 "Route in default VRF not removed"
+
+	$IP addr add dev dummy2 172.16.104.12/24
+	$IP route add vrf red 172.16.106.0/24 dev lo src 172.16.104.12
+
+	$IP addr del dev dummy1 172.16.104.12/24
+	$IP ro ls | grep -q 172.16.106.0/24
+	log_test $? 1 "Route removed in default VRF when source address deleted"
+
+	$IP ro ls vrf red | grep -q 172.16.106.0/24
+	log_test $? 0 "Route in VRF is not removed by address delete"
+
+	# removing address from device in default vrf should remove route from
+	# the default vrf even when route was inserted with a table ID of 0.
+	echo "    Table ID 0"
+
+	$IP addr del dev dummy1 172.16.104.13/24
+	$IP ro ls | grep -q 172.16.107.0/24
+	log_test $? 1 "Route removed in default VRF when source address deleted"
+
 	$IP li del dummy1
 	$IP li del dummy2
 	cleanup
 }
 
+ipv6_del_addr_test()
+{
+	echo
+	echo "IPv6 delete address route tests"
+
+	setup
+
+	set -e
+	for i in $(seq 6); do
+		$IP li add dummy${i} up type dummy
+	done
+
+	$IP li add red up type vrf table 1111
+	$IP ro add vrf red unreachable default
+	for i in $(seq 4 6); do
+		$IP li set dummy${i} vrf red
+	done
+
+	$IP addr add dev dummy1 fe80::1/128
+	$IP addr add dev dummy1 2001:db8:101::1/64
+	$IP addr add dev dummy1 2001:db8:101::10/64
+	$IP addr add dev dummy1 2001:db8:101::11/64
+	$IP addr add dev dummy1 2001:db8:101::12/64
+	$IP addr add dev dummy1 2001:db8:101::13/64
+	$IP addr add dev dummy1 2001:db8:101::14/64
+	$IP addr add dev dummy1 2001:db8:101::15/64
+	$IP addr add dev dummy2 fe80::1/128
+	$IP addr add dev dummy2 2001:db8:101::1/64
+	$IP addr add dev dummy2 2001:db8:101::11/64
+	$IP addr add dev dummy3 fe80::1/128
+
+	$IP addr add dev dummy4 2001:db8:101::1/64
+	$IP addr add dev dummy4 2001:db8:101::10/64
+	$IP addr add dev dummy4 2001:db8:101::11/64
+	$IP addr add dev dummy4 2001:db8:101::12/64
+	$IP addr add dev dummy4 2001:db8:101::13/64
+	$IP addr add dev dummy4 2001:db8:101::14/64
+	$IP addr add dev dummy5 2001:db8:101::1/64
+	$IP addr add dev dummy5 2001:db8:101::11/64
+
+	# Single device using src address
+	$IP route add 2001:db8:110::/64 dev dummy3 src 2001:db8:101::10
+	# Two devices with the same source address
+	$IP route add 2001:db8:111::/64 dev dummy3 src 2001:db8:101::11
+	# VRF with single device using src address
+	$IP route add vrf red 2001:db8:110::/64 dev dummy6 src 2001:db8:101::10
+	# VRF with two devices using src address
+	$IP route add vrf red 2001:db8:111::/64 dev dummy6 src 2001:db8:101::11
+	# src address and nexthop dev in same VRF
+	$IP route add 2001:db8:112::/64 dev dummy3 src 2001:db8:101::12
+	$IP route add vrf red 2001:db8:112::/64 dev dummy6 src 2001:db8:101::12
+	# src address and nexthop device in different VRF
+	$IP route add 2001:db8:113::/64 dev lo src 2001:db8:101::13
+	$IP route add vrf red 2001:db8:113::/64 dev lo src 2001:db8:101::13
+	# table ID 0
+	$IP route add table 0 2001:db8:115::/64 via 2001:db8:101::2 src 2001:db8:101::15
+	# Link local source route
+	$IP route add 2001:db8:116::/64 dev dummy2 src fe80::1
+	$IP route add 2001:db8:117::/64 dev dummy3 src fe80::1
+	set +e
+
+	echo "    Single device using src address"
+
+	$IP addr del dev dummy1 2001:db8:101::10/64
+	$IP -6 route show | grep -q "src 2001:db8:101::10 "
+	log_test $? 1 "Prefsrc removed when src address removed on other device"
+
+	echo "    Two devices with the same source address"
+
+	$IP addr del dev dummy1 2001:db8:101::11/64
+	$IP -6 route show | grep -q "src 2001:db8:101::11 "
+	log_test $? 0 "Prefsrc not removed when src address exist on other device"
+
+	$IP addr del dev dummy2 2001:db8:101::11/64
+	$IP -6 route show | grep -q "src 2001:db8:101::11 "
+	log_test $? 1 "Prefsrc removed when src address removed on all devices"
+
+	echo "    VRF with single device using src address"
+
+	$IP addr del dev dummy4 2001:db8:101::10/64
+	$IP -6 route show vrf red | grep -q "src 2001:db8:101::10 "
+	log_test $? 1 "Prefsrc removed when src address removed on other device"
+
+	echo "    VRF with two devices using src address"
+
+	$IP addr del dev dummy4 2001:db8:101::11/64
+	$IP -6 route show vrf red | grep -q "src 2001:db8:101::11 "
+	log_test $? 0 "Prefsrc not removed when src address exist on other device"
+
+	$IP addr del dev dummy5 2001:db8:101::11/64
+	$IP -6 route show vrf red | grep -q "src 2001:db8:101::11 "
+	log_test $? 1 "Prefsrc removed when src address removed on all devices"
+
+	echo "    src address and nexthop dev in same VRF"
+
+	$IP addr del dev dummy4 2001:db8:101::12/64
+	$IP -6 route show vrf red | grep -q "src 2001:db8:101::12 "
+	log_test $? 1 "Prefsrc removed from VRF when source address deleted"
+	$IP -6 route show | grep -q " src 2001:db8:101::12 "
+	log_test $? 0 "Prefsrc in default VRF not removed"
+
+	$IP addr add dev dummy4 2001:db8:101::12/64
+	$IP route replace vrf red 2001:db8:112::/64 dev dummy6 src 2001:db8:101::12
+	$IP addr del dev dummy1 2001:db8:101::12/64
+	$IP -6 route show vrf red | grep -q "src 2001:db8:101::12 "
+	log_test $? 0 "Prefsrc not removed from VRF when source address exist"
+	$IP -6 route show | grep -q " src 2001:db8:101::12 "
+	log_test $? 1 "Prefsrc in default VRF removed"
+
+	echo "    src address and nexthop device in different VRF"
+
+	$IP addr del dev dummy4 2001:db8:101::13/64
+	$IP -6 route show vrf red | grep -q "src 2001:db8:101::13 "
+	log_test $? 0 "Prefsrc not removed from VRF when nexthop dev in diff VRF"
+	$IP -6 route show | grep -q "src 2001:db8:101::13 "
+	log_test $? 0 "Prefsrc not removed in default VRF"
+
+	$IP addr add dev dummy4 2001:db8:101::13/64
+	$IP addr del dev dummy1 2001:db8:101::13/64
+	$IP -6 route show vrf red | grep -q "src 2001:db8:101::13 "
+	log_test $? 1 "Prefsrc removed from VRF when nexthop dev in diff VRF"
+	$IP -6 route show | grep -q "src 2001:db8:101::13 "
+	log_test $? 1 "Prefsrc removed in default VRF"
+
+	echo "    Table ID 0"
+
+	$IP addr del dev dummy1 2001:db8:101::15/64
+	$IP -6 route show | grep -q "src 2001:db8:101::15"
+	log_test $? 1 "Prefsrc removed from default VRF when source address deleted"
+
+	echo "    Link local source route"
+	$IP addr del dev dummy1 fe80::1/128
+	$IP -6 route show | grep -q "2001:db8:116::/64 dev dummy2 src fe80::1"
+	log_test $? 0 "Prefsrc not removed when delete ll addr from other dev"
+	$IP addr del dev dummy2 fe80::1/128
+	$IP -6 route show | grep -q "2001:db8:116::/64 dev dummy2 src fe80::1"
+	log_test $? 1 "Prefsrc removed when delete ll addr"
+	$IP -6 route show | grep -q "2001:db8:117::/64 dev dummy3 src fe80::1"
+	log_test $? 0 "Prefsrc not removed when delete ll addr from other dev"
+	$IP addr add dev dummy1 fe80::1/128
+	$IP addr del dev dummy3 fe80::1/128
+	$IP -6 route show | grep -q "2001:db8:117::/64 dev dummy3 src fe80::1"
+	log_test $? 1 "Prefsrc removed even ll addr still exist on other dev"
+
+	for i in $(seq 6); do
+		$IP li del dummy${i}
+	done
+	cleanup
+}
 
 ipv4_route_v6_gw_test()
 {
@@ -1826,6 +2298,214 @@ ipv6_mangle_test()
 	route_cleanup
 }
 
+ip_neigh_get_check()
+{
+	ip neigh help 2>&1 | grep -q 'ip neigh get'
+	if [ $? -ne 0 ]; then
+		echo "iproute2 command does not support neigh get. Skipping test"
+		return 1
+	fi
+
+	return 0
+}
+
+ipv4_bcast_neigh_test()
+{
+	local rc
+
+	echo
+	echo "IPv4 broadcast neighbour tests"
+
+	ip_neigh_get_check || return 1
+
+	setup
+
+	set -e
+	run_cmd "$IP neigh add 192.0.2.111 lladdr 00:11:22:33:44:55 nud perm dev dummy0"
+	run_cmd "$IP neigh add 192.0.2.255 lladdr 00:11:22:33:44:55 nud perm dev dummy0"
+
+	run_cmd "$IP neigh get 192.0.2.111 dev dummy0"
+	run_cmd "$IP neigh get 192.0.2.255 dev dummy0"
+
+	run_cmd "$IP address add 192.0.2.1/24 broadcast 192.0.2.111 dev dummy0"
+
+	run_cmd "$IP neigh add 203.0.113.111 nud failed dev dummy0"
+	run_cmd "$IP neigh add 203.0.113.255 nud failed dev dummy0"
+
+	run_cmd "$IP neigh get 203.0.113.111 dev dummy0"
+	run_cmd "$IP neigh get 203.0.113.255 dev dummy0"
+
+	run_cmd "$IP address add 203.0.113.1/24 broadcast 203.0.113.111 dev dummy0"
+	set +e
+
+	run_cmd "$IP neigh get 192.0.2.111 dev dummy0"
+	log_test $? 0 "Resolved neighbour for broadcast address"
+
+	run_cmd "$IP neigh get 192.0.2.255 dev dummy0"
+	log_test $? 0 "Resolved neighbour for network broadcast address"
+
+	run_cmd "$IP neigh get 203.0.113.111 dev dummy0"
+	log_test $? 2 "Unresolved neighbour for broadcast address"
+
+	run_cmd "$IP neigh get 203.0.113.255 dev dummy0"
+	log_test $? 2 "Unresolved neighbour for network broadcast address"
+
+	cleanup
+}
+
+mpath_dep_check()
+{
+	if [ ! -x "$(command -v mausezahn)" ]; then
+		echo "mausezahn command not found. Skipping test"
+		return 1
+	fi
+
+	if [ ! -x "$(command -v jq)" ]; then
+		echo "jq command not found. Skipping test"
+		return 1
+	fi
+
+	if [ ! -x "$(command -v bc)" ]; then
+		echo "bc command not found. Skipping test"
+		return 1
+	fi
+
+	if [ ! -x "$(command -v perf)" ]; then
+		echo "perf command not found. Skipping test"
+		return 1
+	fi
+
+	perf list fib:* | grep -q fib_table_lookup
+	if [ $? -ne 0 ]; then
+		echo "IPv4 FIB tracepoint not found. Skipping test"
+		return 1
+	fi
+
+	perf list fib6:* | grep -q fib6_table_lookup
+	if [ $? -ne 0 ]; then
+		echo "IPv6 FIB tracepoint not found. Skipping test"
+		return 1
+	fi
+
+	return 0
+}
+
+link_stats_get()
+{
+	local ns=$1; shift
+	local dev=$1; shift
+	local dir=$1; shift
+	local stat=$1; shift
+
+	ip -n $ns -j -s link show dev $dev \
+		| jq '.[]["stats64"]["'$dir'"]["'$stat'"]'
+}
+
+list_rcv_eval()
+{
+	local file=$1; shift
+	local expected=$1; shift
+
+	local count=$(tail -n 1 $file | jq '.["counter-value"] | tonumber | floor')
+	local ratio=$(echo "scale=2; $count / $expected" | bc -l)
+	local res=$(echo "$ratio >= 0.95" | bc)
+	[[ $res -eq 1 ]]
+	log_test $? 0 "Multipath route hit ratio ($ratio)"
+}
+
+ipv4_mpath_list_test()
+{
+	echo
+	echo "IPv4 multipath list receive tests"
+
+	mpath_dep_check || return 1
+
+	route_setup
+
+	set -e
+	run_cmd "ip netns exec ns1 ethtool -K veth1 tcp-segmentation-offload off"
+
+	run_cmd "ip netns exec ns2 bash -c \"echo 20000 > /sys/class/net/veth2/gro_flush_timeout\""
+	run_cmd "ip netns exec ns2 bash -c \"echo 1 > /sys/class/net/veth2/napi_defer_hard_irqs\""
+	run_cmd "ip netns exec ns2 ethtool -K veth2 generic-receive-offload on"
+	run_cmd "ip -n ns2 link add name nh1 up type dummy"
+	run_cmd "ip -n ns2 link add name nh2 up type dummy"
+	run_cmd "ip -n ns2 address add 172.16.201.1/24 dev nh1"
+	run_cmd "ip -n ns2 address add 172.16.202.1/24 dev nh2"
+	run_cmd "ip -n ns2 neigh add 172.16.201.2 lladdr 00:11:22:33:44:55 nud perm dev nh1"
+	run_cmd "ip -n ns2 neigh add 172.16.202.2 lladdr 00:aa:bb:cc:dd:ee nud perm dev nh2"
+	run_cmd "ip -n ns2 route add 203.0.113.0/24
+		nexthop via 172.16.201.2 nexthop via 172.16.202.2"
+	run_cmd "ip netns exec ns2 sysctl -qw net.ipv4.fib_multipath_hash_policy=1"
+	run_cmd "ip netns exec ns2 sysctl -qw net.ipv4.conf.veth2.rp_filter=0"
+	run_cmd "ip netns exec ns2 sysctl -qw net.ipv4.conf.all.rp_filter=0"
+	run_cmd "ip netns exec ns2 sysctl -qw net.ipv4.conf.default.rp_filter=0"
+	set +e
+
+	local dmac=$(ip -n ns2 -j link show dev veth2 | jq -r '.[]["address"]')
+	local tmp_file=$(mktemp)
+	local cmd="ip netns exec ns1 mausezahn veth1 -a own -b $dmac
+		-A 172.16.101.1 -B 203.0.113.1 -t udp 'sp=12345,dp=0-65535' -q"
+
+	# Packets forwarded in a list using a multipath route must not reuse a
+	# cached result so that a flow always hits the same nexthop. In other
+	# words, the FIB lookup tracepoint needs to be triggered for every
+	# packet.
+	local t0_rx_pkts=$(link_stats_get ns2 veth2 rx packets)
+	run_cmd "perf stat -a -e fib:fib_table_lookup --filter 'err == 0' -j -o $tmp_file -- $cmd"
+	local t1_rx_pkts=$(link_stats_get ns2 veth2 rx packets)
+	local diff=$(echo $t1_rx_pkts - $t0_rx_pkts | bc -l)
+	list_rcv_eval $tmp_file $diff
+
+	rm $tmp_file
+	route_cleanup
+}
+
+ipv6_mpath_list_test()
+{
+	echo
+	echo "IPv6 multipath list receive tests"
+
+	mpath_dep_check || return 1
+
+	route_setup
+
+	set -e
+	run_cmd "ip netns exec ns1 ethtool -K veth1 tcp-segmentation-offload off"
+
+	run_cmd "ip netns exec ns2 bash -c \"echo 20000 > /sys/class/net/veth2/gro_flush_timeout\""
+	run_cmd "ip netns exec ns2 bash -c \"echo 1 > /sys/class/net/veth2/napi_defer_hard_irqs\""
+	run_cmd "ip netns exec ns2 ethtool -K veth2 generic-receive-offload on"
+	run_cmd "ip -n ns2 link add name nh1 up type dummy"
+	run_cmd "ip -n ns2 link add name nh2 up type dummy"
+	run_cmd "ip -n ns2 -6 address add 2001:db8:201::1/64 dev nh1"
+	run_cmd "ip -n ns2 -6 address add 2001:db8:202::1/64 dev nh2"
+	run_cmd "ip -n ns2 -6 neigh add 2001:db8:201::2 lladdr 00:11:22:33:44:55 nud perm dev nh1"
+	run_cmd "ip -n ns2 -6 neigh add 2001:db8:202::2 lladdr 00:aa:bb:cc:dd:ee nud perm dev nh2"
+	run_cmd "ip -n ns2 -6 route add 2001:db8:301::/64
+		nexthop via 2001:db8:201::2 nexthop via 2001:db8:202::2"
+	run_cmd "ip netns exec ns2 sysctl -qw net.ipv6.fib_multipath_hash_policy=1"
+	set +e
+
+	local dmac=$(ip -n ns2 -j link show dev veth2 | jq -r '.[]["address"]')
+	local tmp_file=$(mktemp)
+	local cmd="ip netns exec ns1 mausezahn -6 veth1 -a own -b $dmac
+		-A 2001:db8:101::1 -B 2001:db8:301::1 -t udp 'sp=12345,dp=0-65535' -q"
+
+	# Packets forwarded in a list using a multipath route must not reuse a
+	# cached result so that a flow always hits the same nexthop. In other
+	# words, the FIB lookup tracepoint needs to be triggered for every
+	# packet.
+	local t0_rx_pkts=$(link_stats_get ns2 veth2 rx packets)
+	run_cmd "perf stat -a -e fib6:fib6_table_lookup --filter 'err == 0' -j -o $tmp_file -- $cmd"
+	local t1_rx_pkts=$(link_stats_get ns2 veth2 rx packets)
+	local diff=$(echo $t1_rx_pkts - $t0_rx_pkts | bc -l)
+	list_rcv_eval $tmp_file $diff
+
+	rm $tmp_file
+	route_cleanup
+}
+
 ################################################################################
 # usage
 
@@ -1844,6 +2524,8 @@ EOF
 
 ################################################################################
 # main
+
+trap cleanup EXIT
 
 while getopts :t:pPhv o
 do
@@ -1889,17 +2571,24 @@ do
 	fib_carrier_test|carrier)	fib_carrier_test;;
 	fib_rp_filter_test|rp_filter)	fib_rp_filter_test;;
 	fib_nexthop_test|nexthop)	fib_nexthop_test;;
+	fib_notify_test|ipv4_notify)	fib_notify_test;;
+	fib6_notify_test|ipv6_notify)	fib6_notify_test;;
 	fib_suppress_test|suppress)	fib_suppress_test;;
 	ipv6_route_test|ipv6_rt)	ipv6_route_test;;
 	ipv4_route_test|ipv4_rt)	ipv4_route_test;;
 	ipv6_addr_metric)		ipv6_addr_metric_test;;
 	ipv4_addr_metric)		ipv4_addr_metric_test;;
 	ipv4_del_addr)			ipv4_del_addr_test;;
+	ipv6_del_addr)			ipv6_del_addr_test;;
 	ipv6_route_metrics)		ipv6_route_metrics_test;;
 	ipv4_route_metrics)		ipv4_route_metrics_test;;
 	ipv4_route_v6_gw)		ipv4_route_v6_gw_test;;
 	ipv4_mangle)			ipv4_mangle_test;;
 	ipv6_mangle)			ipv6_mangle_test;;
+	ipv4_bcast_neigh)		ipv4_bcast_neigh_test;;
+	fib6_gc_test|ipv6_gc)		fib6_gc_test;;
+	ipv4_mpath_list)		ipv4_mpath_list_test;;
+	ipv6_mpath_list)		ipv6_mpath_list_test;;
 
 	help) echo "Test names: $TESTS"; exit 0;;
 	esac

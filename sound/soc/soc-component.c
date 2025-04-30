@@ -13,9 +13,10 @@
 #include <sound/soc.h>
 #include <linux/bitops.h>
 
-#define soc_component_ret(dai, ret) _soc_component_ret(dai, __func__, ret)
+#define soc_component_ret(dai, ret) _soc_component_ret(dai, __func__, ret, -1)
+#define soc_component_ret_reg_rw(dai, ret, reg) _soc_component_ret(dai, __func__, ret, reg)
 static inline int _soc_component_ret(struct snd_soc_component *component,
-				     const char *func, int ret)
+				     const char *func, int ret, int reg)
 {
 	/* Positive/Zero values are not errors */
 	if (ret >= 0)
@@ -27,9 +28,14 @@ static inline int _soc_component_ret(struct snd_soc_component *component,
 	case -ENOTSUPP:
 		break;
 	default:
-		dev_err(component->dev,
-			"ASoC: error at %s on %s: %d\n",
-			func, component->name, ret);
+		if (reg == -1)
+			dev_err(component->dev,
+				"ASoC: error at %s on %s: %d\n",
+				func, component->name, ret);
+		else
+			dev_err(component->dev,
+				"ASoC: error at %s on %s for register: [0x%08x] %d\n",
+				func, component->name, reg, ret);
 	}
 
 	return ret;
@@ -230,6 +236,29 @@ int snd_soc_component_force_enable_pin_unlocked(
 }
 EXPORT_SYMBOL_GPL(snd_soc_component_force_enable_pin_unlocked);
 
+int snd_soc_component_notify_control(struct snd_soc_component *component,
+				     const char * const ctl)
+{
+	char name[SNDRV_CTL_ELEM_ID_NAME_MAXLEN];
+	struct snd_kcontrol *kctl;
+
+	/* When updating, change also snd_soc_dapm_widget_name_cmp() */
+	if (component->name_prefix)
+		snprintf(name, ARRAY_SIZE(name), "%s %s", component->name_prefix, ctl);
+	else
+		snprintf(name, ARRAY_SIZE(name), "%s", ctl);
+
+	kctl = snd_soc_card_get_kcontrol(component->card, name);
+	if (!kctl)
+		return soc_component_ret(component, -EINVAL);
+
+	snd_ctl_notify(component->card->snd_card,
+		       SNDRV_CTL_EVENT_MASK_VALUE, &kctl->id);
+
+	return 0;
+}
+EXPORT_SYMBOL_GPL(snd_soc_component_notify_control);
+
 /**
  * snd_soc_component_set_jack - configure component jack.
  * @component: COMPONENTs
@@ -250,9 +279,28 @@ int snd_soc_component_set_jack(struct snd_soc_component *component,
 }
 EXPORT_SYMBOL_GPL(snd_soc_component_set_jack);
 
+/**
+ * snd_soc_component_get_jack_type
+ * @component: COMPONENTs
+ *
+ * Returns the jack type of the component
+ * This can either be the supported type or one read from
+ * devicetree with the property: jack-type.
+ */
+int snd_soc_component_get_jack_type(
+	struct snd_soc_component *component)
+{
+	int ret = -ENOTSUPP;
+
+	if (component->driver->get_jack_type)
+		ret = component->driver->get_jack_type(component);
+
+	return soc_component_ret(component, ret);
+}
+EXPORT_SYMBOL_GPL(snd_soc_component_get_jack_type);
+
 int snd_soc_component_module_get(struct snd_soc_component *component,
-				 struct snd_pcm_substream *substream,
-				 int upon_open)
+				 void *mark, int upon_open)
 {
 	int ret = 0;
 
@@ -260,25 +308,24 @@ int snd_soc_component_module_get(struct snd_soc_component *component,
 	    !try_module_get(component->dev->driver->owner))
 		ret = -ENODEV;
 
-	/* mark substream if succeeded */
+	/* mark module if succeeded */
 	if (ret == 0)
-		soc_component_mark_push(component, substream, module);
+		soc_component_mark_push(component, mark, module);
 
 	return soc_component_ret(component, ret);
 }
 
 void snd_soc_component_module_put(struct snd_soc_component *component,
-				  struct snd_pcm_substream *substream,
-				  int upon_open, int rollback)
+				  void *mark, int upon_open, int rollback)
 {
-	if (rollback && !soc_component_mark_match(component, substream, module))
+	if (rollback && !soc_component_mark_match(component, mark, module))
 		return;
 
 	if (component->driver->module_get_upon_open == !!upon_open)
 		module_put(component->dev->driver->owner);
 
-	/* remove marked substream */
-	soc_component_mark_pop(component, substream, module);
+	/* remove the mark from module */
+	soc_component_mark_pop(component, mark, module);
 }
 
 int snd_soc_component_open(struct snd_soc_component *component,
@@ -425,43 +472,36 @@ EXPORT_SYMBOL_GPL(snd_soc_component_exit_regmap);
 
 #endif
 
-int snd_soc_component_compr_open(struct snd_compr_stream *cstream)
+int snd_soc_component_compr_open(struct snd_soc_component *component,
+				 struct snd_compr_stream *cstream)
 {
-	struct snd_soc_pcm_runtime *rtd = cstream->private_data;
-	struct snd_soc_component *component;
-	int i, ret;
+	int ret = 0;
 
-	for_each_rtd_components(rtd, i, component) {
-		if (component->driver->compress_ops &&
-		    component->driver->compress_ops->open) {
-			ret = component->driver->compress_ops->open(component, cstream);
-			if (ret < 0)
-				return soc_component_ret(component, ret);
-		}
+	if (component->driver->compress_ops &&
+	    component->driver->compress_ops->open)
+		ret = component->driver->compress_ops->open(component, cstream);
+
+	/* mark substream if succeeded */
+	if (ret == 0)
 		soc_component_mark_push(component, cstream, compr_open);
-	}
 
-	return 0;
+	return soc_component_ret(component, ret);
 }
 EXPORT_SYMBOL_GPL(snd_soc_component_compr_open);
 
-void snd_soc_component_compr_free(struct snd_compr_stream *cstream,
+void snd_soc_component_compr_free(struct snd_soc_component *component,
+				  struct snd_compr_stream *cstream,
 				  int rollback)
 {
-	struct snd_soc_pcm_runtime *rtd = cstream->private_data;
-	struct snd_soc_component *component;
-	int i;
+	if (rollback && !soc_component_mark_match(component, cstream, compr_open))
+		return;
 
-	for_each_rtd_components(rtd, i, component) {
-		if (rollback && !soc_component_mark_match(component, cstream, compr_open))
-			continue;
+	if (component->driver->compress_ops &&
+	    component->driver->compress_ops->free)
+		component->driver->compress_ops->free(component, cstream);
 
-		if (component->driver->compress_ops &&
-		    component->driver->compress_ops->free)
-			component->driver->compress_ops->free(component, cstream);
-
-		soc_component_mark_pop(component, cstream, compr_open);
-	}
+	/* remove marked substream */
+	soc_component_mark_pop(component, cstream, compr_open);
 }
 EXPORT_SYMBOL_GPL(snd_soc_component_compr_free);
 
@@ -533,7 +573,7 @@ int snd_soc_component_compr_get_caps(struct snd_compr_stream *cstream,
 	struct snd_soc_component *component;
 	int i, ret = 0;
 
-	mutex_lock_nested(&rtd->card->pcm_mutex, rtd->card->pcm_subclass);
+	snd_soc_dpcm_mutex_lock(rtd);
 
 	for_each_rtd_components(rtd, i, component) {
 		if (component->driver->compress_ops &&
@@ -544,7 +584,7 @@ int snd_soc_component_compr_get_caps(struct snd_compr_stream *cstream,
 		}
 	}
 
-	mutex_unlock(&rtd->card->pcm_mutex);
+	snd_soc_dpcm_mutex_unlock(rtd);
 
 	return soc_component_ret(component, ret);
 }
@@ -557,7 +597,7 @@ int snd_soc_component_compr_get_codec_caps(struct snd_compr_stream *cstream,
 	struct snd_soc_component *component;
 	int i, ret = 0;
 
-	mutex_lock_nested(&rtd->card->pcm_mutex, rtd->card->pcm_subclass);
+	snd_soc_dpcm_mutex_lock(rtd);
 
 	for_each_rtd_components(rtd, i, component) {
 		if (component->driver->compress_ops &&
@@ -568,7 +608,7 @@ int snd_soc_component_compr_get_codec_caps(struct snd_compr_stream *cstream,
 		}
 	}
 
-	mutex_unlock(&rtd->card->pcm_mutex);
+	snd_soc_dpcm_mutex_unlock(rtd);
 
 	return soc_component_ret(component, ret);
 }
@@ -621,7 +661,7 @@ int snd_soc_component_compr_copy(struct snd_compr_stream *cstream,
 	struct snd_soc_component *component;
 	int i, ret = 0;
 
-	mutex_lock_nested(&rtd->card->pcm_mutex, rtd->card->pcm_subclass);
+	snd_soc_dpcm_mutex_lock(rtd);
 
 	for_each_rtd_components(rtd, i, component) {
 		if (component->driver->compress_ops &&
@@ -632,7 +672,7 @@ int snd_soc_component_compr_copy(struct snd_compr_stream *cstream,
 		}
 	}
 
-	mutex_unlock(&rtd->card->pcm_mutex);
+	snd_soc_dpcm_mutex_unlock(rtd);
 
 	return soc_component_ret(component, ret);
 }
@@ -696,7 +736,7 @@ static unsigned int soc_component_read_no_lock(
 		ret = -EIO;
 
 	if (ret < 0)
-		return soc_component_ret(component, ret);
+		return soc_component_ret_reg_rw(component, ret, reg);
 
 	return val;
 }
@@ -732,7 +772,7 @@ static int soc_component_write_no_lock(
 	else if (component->driver->write)
 		ret = component->driver->write(component, reg, val);
 
-	return soc_component_ret(component, ret);
+	return soc_component_ret_reg_rw(component, ret, reg);
 }
 
 /**
@@ -774,7 +814,7 @@ static int snd_soc_component_update_bits_legacy(
 
 	mutex_unlock(&component->io_mutex);
 
-	return soc_component_ret(component, ret);
+	return soc_component_ret_reg_rw(component, ret, reg);
 }
 
 /**
@@ -802,7 +842,7 @@ int snd_soc_component_update_bits(struct snd_soc_component *component,
 							   mask, val, &change);
 
 	if (ret < 0)
-		return soc_component_ret(component, ret);
+		return soc_component_ret_reg_rw(component, ret, reg);
 	return change;
 }
 EXPORT_SYMBOL_GPL(snd_soc_component_update_bits);
@@ -838,7 +878,7 @@ int snd_soc_component_update_bits_async(struct snd_soc_component *component,
 							   mask, val, &change);
 
 	if (ret < 0)
-		return soc_component_ret(component, ret);
+		return soc_component_ret_reg_rw(component, ret, reg);
 	return change;
 }
 EXPORT_SYMBOL_GPL(snd_soc_component_update_bits_async);
@@ -935,6 +975,48 @@ int snd_soc_pcm_component_pointer(struct snd_pcm_substream *substream)
 	return 0;
 }
 
+static bool snd_soc_component_is_codec_on_rtd(struct snd_soc_pcm_runtime *rtd,
+					      struct snd_soc_component *component)
+{
+	struct snd_soc_dai *dai;
+	int i;
+
+	for_each_rtd_codec_dais(rtd, i, dai) {
+		if (dai->component == component)
+			return true;
+	}
+
+	return false;
+}
+
+void snd_soc_pcm_component_delay(struct snd_pcm_substream *substream,
+				 snd_pcm_sframes_t *cpu_delay,
+				 snd_pcm_sframes_t *codec_delay)
+{
+	struct snd_soc_pcm_runtime *rtd = asoc_substream_to_rtd(substream);
+	struct snd_soc_component *component;
+	snd_pcm_sframes_t delay;
+	int i;
+
+	/*
+	 * We're looking for the delay through the full audio path so it needs to
+	 * be the maximum of the Components doing transmit and the maximum of the
+	 * Components doing receive (ie, all CPUs and all CODECs) rather than
+	 * just the maximum of all Components.
+	 */
+	for_each_rtd_components(rtd, i, component) {
+		if (!component->driver->delay)
+			continue;
+
+		delay = component->driver->delay(component, substream);
+
+		if (snd_soc_component_is_codec_on_rtd(rtd, component))
+			*codec_delay = max(*codec_delay, delay);
+		else
+			*cpu_delay = max(*cpu_delay, delay);
+	}
+}
+
 int snd_soc_pcm_component_ioctl(struct snd_pcm_substream *substream,
 				unsigned int cmd, void *arg)
 {
@@ -971,9 +1053,9 @@ int snd_soc_pcm_component_sync_stop(struct snd_pcm_substream *substream)
 	return 0;
 }
 
-int snd_soc_pcm_component_copy_user(struct snd_pcm_substream *substream,
-				    int channel, unsigned long pos,
-				    void __user *buf, unsigned long bytes)
+int snd_soc_pcm_component_copy(struct snd_pcm_substream *substream,
+			       int channel, unsigned long pos,
+			       struct iov_iter *iter, unsigned long bytes)
 {
 	struct snd_soc_pcm_runtime *rtd = asoc_substream_to_rtd(substream);
 	struct snd_soc_component *component;
@@ -981,12 +1063,10 @@ int snd_soc_pcm_component_copy_user(struct snd_pcm_substream *substream,
 
 	/* FIXME. it returns 1st copy now */
 	for_each_rtd_components(rtd, i, component)
-		if (component->driver->copy_user)
-			return soc_component_ret(
-				component,
-				component->driver->copy_user(
-					component, substream, channel,
-					pos, buf, bytes));
+		if (component->driver->copy)
+			return soc_component_ret(component,
+				component->driver->copy(component, substream,
+					channel, pos, iter, bytes));
 
 	return -EINVAL;
 }

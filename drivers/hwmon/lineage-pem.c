@@ -191,7 +191,7 @@ static struct pem_data *pem_update_device(struct device *dev)
 		i2c_smbus_write_byte(client, PEM_CLEAR_INFO_FLAGS);
 
 		data->last_updated = jiffies;
-		data->valid = 1;
+		data->valid = true;
 	}
 abort:
 	mutex_unlock(&data->update_lock);
@@ -511,7 +511,7 @@ static struct i2c_driver pem_driver = {
 	.driver = {
 		   .name = "lineage_pem",
 		   },
-	.probe_new = pem_probe,
+	.probe = pem_probe,
 	.id_table = pem_id,
 };
 

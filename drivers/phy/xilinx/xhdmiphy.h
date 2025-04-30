@@ -73,13 +73,50 @@
 					XHDMIPHY_INTR_TXTMRTIMEOUT_MASK | \
 					XHDMIPHY_INTR_RXTMRTIMEOUT_MASK)
 
+#define XHDMIPHY_INTR_GTALL_MASK	(XHDMIPHY_INTR_TXRESETDONE_MASK | \
+					 XHDMIPHY_INTR_RXRESETDONE_MASK | \
+					 XHDMIPHY_INTR_LCPLL_LOCK_MASK | \
+					 XHDMIPHY_INTR_RPLL_LOCK_MASK | \
+					 XHDMIPHY_INTR_TXFREQCHANGE_MASK | \
+					 XHDMIPHY_INTR_RXFREQCHANGE_MASK | \
+					 XHDMIPHY_INTR_TXMMCMUSRCLK_LOCK_MASK | \
+					 XHDMIPHY_INTR_RXMMCMUSRCLK_LOCK_MASK | \
+					 XHDMIPHY_INTR_TXGPO_RE_MASK | \
+					 XHDMIPHY_INTR_RXGPO_RE_MASK | \
+					 XHDMIPHY_INTR_TXTMRTIMEOUT_MASK)
+
+#define XHDMIPHY_GTYE5_TX_ALL_MASK	(XHDMIPHY_INTR_TXRESETDONE_MASK | \
+					 XHDMIPHY_INTR_LCPLL_LOCK_MASK | \
+					 XHDMIPHY_INTR_TXFREQCHANGE_MASK | \
+					 XHDMIPHY_INTR_TXMMCMUSRCLK_LOCK_MASK | \
+					 XHDMIPHY_INTR_TXGPO_RE_MASK | \
+					 XHDMIPHY_INTR_TXTMRTIMEOUT_MASK)
+
+#define XHDMIPHY_GTYE5_RX_ALL_MASK	(XHDMIPHY_INTR_RXRESETDONE_MASK | \
+					 XHDMIPHY_INTR_RPLL_LOCK_MASK | \
+					 XHDMIPHY_INTR_RXFREQCHANGE_MASK | \
+					 XHDMIPHY_INTR_RXMMCMUSRCLK_LOCK_MASK |\
+					 XHDMIPHY_INTR_RXGPO_RE_MASK | \
+					 XHDMIPHY_INTR_RXTMRTIMEOUT_MASK)
+
+#define XHDMIPHY_GTYE5_TX_MASK		(XHDMIPHY_INTR_LCPLL_LOCK_MASK |\
+					 XHDMIPHY_INTR_TXGPO_RE_MASK |\
+					 XHDMIPHY_INTR_TXRESETDONE_MASK |\
+					 XHDMIPHY_INTR_TXMMCMUSRCLK_LOCK_MASK)
+
+#define XHDMIPHY_GTYE5_RX_MASK		(XHDMIPHY_INTR_RPLL_LOCK_MASK |\
+					 XHDMIPHY_INTR_RXGPO_RE_MASK |\
+					 XHDMIPHY_INTR_RXRESETDONE_MASK |\
+					 XHDMIPHY_INTR_RXMMCMUSRCLK_LOCK_MASK)
+
 #define XHDMIPHY_DRU_REF_CLK_HZ		100000000
-#define XHDMIPHY_MAX_LANES		4
+#define XHDMIPHY_MAX_LANES		8
 #define VPHY_DEVICE_ID_BASE		256
 
 #define XHDMIPHY_GTHE4				5
 #define XHDMIPHY_GTYE4				6
 #define XHDMIPHY_GTYE5				7
+#define XHDMIPHY_GTYP				8
 #define XHDMIPHY_REFCLKSEL_MAX			5
 
 /* linerate ranges */
@@ -632,6 +669,7 @@
 #define XHDMIPHY_MMCM4_DRP_FILTER_REG2		0x4f
 #define XHDMIPHY_MMCM4_PWR_REG			0x27
 #define XHDMIPHY_MMCM4_WRITE_VAL		0xffff
+#define XHDMIPHY_PLL_WRITE_VAL			0x4401
 
 /* registers and masks of mmcme5 DRP */
 #define XHDMIPHY_MMCM5_DRP_CLKFBOUT_1_REG	0x0c
@@ -685,6 +723,13 @@ enum gt_type {
 	XHDMIPHY_GTTYPE_GTHE4 = 5,
 	XHDMIPHY_GTTYPE_GTYE4 = 6,
 	XHDMIPHY_GTTYPE_GTYE5 = 7,
+	XHDMIPHY_GTTYPE_GTYP = 8,
+};
+
+enum gt_direction {
+	XHDMIPHY_SIMPLE_TX = 1,
+	XHDMIPHY_SIMPLE_RX = 2,
+	XHDMIPHY_DUPLEX = 3,
 };
 
 enum prot_type {
@@ -801,6 +846,11 @@ enum prbs_pat {
 	XHDMIPHY_PRBSSEL_PCIE = 0x8,		/* PCIE compliance pattern */
 	XHDMIPHY_PRBSSEL_SQUARE_2UI = 0x9,	/* square wave with 2 UI */
 	XHDMIPHY_PRBSSEL_SQUARE_16UI = 0xA,	/* square wave with 16 UI */
+};
+
+enum clk_primitive {
+	XHDMIPHY_MMCM = 0,
+	XHDMIPHY_PLL = 1,
 };
 
 enum xhdmiphy_mode {
@@ -946,13 +996,14 @@ struct hdmi21_cfg {
 
 struct clk_config {
 	int (*sel_mux)(u8 direction, u8 clksrc);
-	int (*set_linerate)(u8 direction, u8 mode, u64 lrate);
+	int (*set_linerate)(u8 direction, u8 mode, u64 lrate, u8 lanes);
 };
 
 struct xhdmiphy_conf {
 	u8 tx_channels;
 	u8 rx_channels;
 	enum gt_type gt_type;
+	enum gt_direction gt_direction;
 	enum prot_type tx_protocol;
 	enum prot_type rx_protocol;
 	enum refclk_sel tx_refclk_sel;		/* tx refclk selection. */
@@ -973,6 +1024,8 @@ struct xhdmiphy_conf {
 	u8 gt_as_tx_tmdsclk;	/* use 4th GT channel as tx TMDS clock */
 	u8 rx_maxrate;
 	u8 tx_maxrate;
+	u8 rx_clk_primitive;
+	u8 tx_clk_primitive;
 };
 
 struct xhdmiphy_dev {
@@ -981,7 +1034,7 @@ struct xhdmiphy_dev {
 	struct hdmiphy_callback phycb[TX_READY_CB];
 	int irq;
 	struct mutex hdmiphy_mutex;	/* protecting phy operations */
-	struct xhdmiphy_lane *lanes[4];
+	struct xhdmiphy_lane *lanes[XHDMIPHY_MAX_LANES];
 	struct clk_config *data;
 	struct clk *axi_lite_clk;
 	struct clk *dru_clk;
@@ -1000,8 +1053,11 @@ struct xhdmiphy_dev {
 	u8 tx_samplerate;
 	u8 rx_dru_enabled;
 	u8 qpll_present;
+	u8 phy_ready;
 };
 
+void xhdmiphy_set(struct xhdmiphy_dev *inst, u32 addr, u32 set);
+void xhdmiphy_clr(struct xhdmiphy_dev *inst, u32 addr, u32 clr);
 void xhdmiphy_set_clr(struct xhdmiphy_dev *inst, u32 addr, u32 reg_val,
 		      u32 mask_val, u8 set_clr);
 void xhdmiphy_ch2ids(struct xhdmiphy_dev *inst, enum chid chid, u8 *id0,

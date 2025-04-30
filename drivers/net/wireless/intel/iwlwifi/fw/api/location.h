@@ -1,7 +1,7 @@
 /* SPDX-License-Identifier: GPL-2.0 OR BSD-3-Clause */
 /*
  * Copyright (C) 2015-2017 Intel Deutschland GmbH
- * Copyright (C) 2018-2021 Intel Corporation
+ * Copyright (C) 2018-2022 Intel Corporation
  */
 #ifndef __iwl_fw_api_location_h__
 #define __iwl_fw_api_location_h__
@@ -35,8 +35,11 @@ enum iwl_location_subcmd_ids {
 	 */
 	TOF_RANGE_REQ_EXT_CMD = 0x3,
 	/**
-	 * @TOF_RESPONDER_CONFIG_CMD: FTM responder configuration,
-	 *	uses &struct iwl_tof_responder_config_cmd
+	 * @TOF_RESPONDER_CONFIG_CMD: FTM responder configuration, one of
+	 *	&struct iwl_tof_responder_config_cmd_v6,
+	 *	&struct iwl_tof_responder_config_cmd_v7,
+	 *	&struct iwl_tof_responder_config_cmd_v8 or
+	 *	&struct iwl_tof_responder_config_cmd_v9
 	 */
 	TOF_RESPONDER_CONFIG_CMD = 0x4,
 	/**
@@ -69,8 +72,11 @@ enum iwl_location_subcmd_ids {
 	 */
 	TOF_MCSI_DEBUG_NOTIF = 0xFE,
 	/**
-	 * @TOF_RANGE_RESPONSE_NOTIF: ranging response, using
-	 *	&struct iwl_tof_range_rsp_ntfy
+	 * @TOF_RANGE_RESPONSE_NOTIF: ranging response, using one of
+	 *	&struct iwl_tof_range_rsp_ntfy_v5,
+	 *	&struct iwl_tof_range_rsp_ntfy_v6,
+	 *	&struct iwl_tof_range_rsp_ntfy_v7 or
+	 *	&struct iwl_tof_range_rsp_ntfy_v8
 	 */
 	TOF_RANGE_RESPONSE_NOTIF = 0xFF,
 };
@@ -206,7 +212,7 @@ enum iwl_tof_responder_cfg_flags {
 	IWL_TOF_RESPONDER_FLAGS_SPECIFIC_CALIB_MODE = BIT(8),
 	IWL_TOF_RESPONDER_FLAGS_FAST_ALGO_SUPPORT = BIT(9),
 	IWL_TOF_RESPONDER_FLAGS_RETRY_ON_ALGO_FAIL = BIT(10),
-	IWL_TOF_RESPONDER_FLAGS_FTM_TX_ANT = RATE_MCS_ANT_ABC_MSK,
+	IWL_TOF_RESPONDER_FLAGS_FTM_TX_ANT = RATE_MCS_ANT_AB_MSK,
 	IWL_TOF_RESPONDER_FLAGS_NDP_SUPPORT = BIT(24),
 	IWL_TOF_RESPONDER_FLAGS_LMR_FEEDBACK = BIT(25),
 	IWL_TOF_RESPONDER_FLAGS_SESSION_ID = BIT(27),
@@ -629,6 +635,7 @@ enum iwl_location_bw {
 	IWL_LOCATION_BW_20MHZ,
 	IWL_LOCATION_BW_40MHZ,
 	IWL_LOCATION_BW_80MHZ,
+	IWL_LOCATION_BW_160MHZ,
 };
 
 #define TK_11AZ_LEN	32
@@ -1500,7 +1507,9 @@ struct iwl_tof_range_rsp_ap_entry_ntfy_v6 {
 	u8 reserved[3];
 	u8 rx_pn[IEEE80211_CCMP_PN_LEN];
 	u8 tx_pn[IEEE80211_CCMP_PN_LEN];
-} __packed; /* LOCATION_RANGE_RSP_AP_ETRY_NTFY_API_S_VER_6 */
+} __packed; /* LOCATION_RANGE_RSP_AP_ETRY_NTFY_API_S_VER_6,
+	       LOCATION_RANGE_RSP_AP_ETRY_NTFY_API_S_VER_7 */
+
 
 /**
  * enum iwl_tof_response_status - tof response status
@@ -1581,7 +1590,8 @@ struct iwl_tof_range_rsp_ntfy_v8 {
 	u8 last_report;
 	u8 reserved;
 	struct iwl_tof_range_rsp_ap_entry_ntfy_v6 ap[IWL_MVM_TOF_MAX_APS];
-} __packed; /* LOCATION_RANGE_RSP_NTFY_API_S_VER_8 */
+} __packed; /* LOCATION_RANGE_RSP_NTFY_API_S_VER_8,
+	       LOCATION_RANGE_RSP_NTFY_API_S_VER_9 */
 
 #define IWL_MVM_TOF_MCSI_BUF_SIZE  (245)
 /**

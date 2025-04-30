@@ -10,8 +10,9 @@
 #include <linux/iopoll.h>
 #include <linux/kernel.h>
 #include <linux/module.h>
-#include <linux/of_address.h>
+#include <linux/of.h>
 #include <linux/of_platform.h>
+#include <linux/platform_device.h>
 #include <linux/slab.h>
 
 #define LUT_MAX_ENTRIES			32U
@@ -36,6 +37,8 @@ enum {
 struct mtk_cpufreq_data {
 	struct cpufreq_frequency_table *table;
 	void __iomem *reg_bases[REG_ARRAY_SIZE];
+	struct resource *res;
+	void __iomem *base;
 	int nr_opp;
 };
 
@@ -49,8 +52,8 @@ static const u16 cpufreq_mtk_offsets[REG_ARRAY_SIZE] = {
 };
 
 static int __maybe_unused
-mtk_cpufreq_get_cpu_power(unsigned long *mW,
-			  unsigned long *KHz, struct device *cpu_dev)
+mtk_cpufreq_get_cpu_power(struct device *cpu_dev, unsigned long *uW,
+			  unsigned long *KHz)
 {
 	struct mtk_cpufreq_data *data;
 	struct cpufreq_policy *policy;
@@ -69,8 +72,9 @@ mtk_cpufreq_get_cpu_power(unsigned long *mW,
 	i--;
 
 	*KHz = data->table[i].frequency;
-	*mW = readl_relaxed(data->reg_bases[REG_EM_POWER_TBL] +
-			    i * LUT_ROW_SIZE) / 1000;
+	/* Provide micro-Watts value to the Energy Model */
+	*uW = readl_relaxed(data->reg_bases[REG_EM_POWER_TBL] +
+			    i * LUT_ROW_SIZE);
 
 	return 0;
 }
@@ -109,7 +113,7 @@ static unsigned int mtk_cpufreq_hw_fast_switch(struct cpufreq_policy *policy,
 	struct mtk_cpufreq_data *data = policy->driver_data;
 	unsigned int index;
 
-	index = cpufreq_table_find_index_dl(policy, target_freq);
+	index = cpufreq_table_find_index_dl(policy, target_freq, false);
 
 	writel_relaxed(index, data->reg_bases[REG_FREQ_PERF_STATE]);
 
@@ -156,6 +160,8 @@ static int mtk_cpu_resources_init(struct platform_device *pdev,
 {
 	struct mtk_cpufreq_data *data;
 	struct device *dev = &pdev->dev;
+	struct resource *res;
+	struct of_phandle_args args;
 	void __iomem *base;
 	int ret, i;
 	int index;
@@ -164,15 +170,35 @@ static int mtk_cpu_resources_init(struct platform_device *pdev,
 	if (!data)
 		return -ENOMEM;
 
-	index = of_perf_domain_get_sharing_cpumask(policy->cpu, "performance-domains",
-						   "#performance-domain-cells",
-						   policy->cpus);
-	if (index < 0)
-		return index;
+	ret = of_perf_domain_get_sharing_cpumask(policy->cpu, "performance-domains",
+						 "#performance-domain-cells",
+						 policy->cpus, &args);
+	if (ret < 0)
+		return ret;
 
-	base = devm_platform_ioremap_resource(pdev, index);
-	if (IS_ERR(base))
-		return PTR_ERR(base);
+	index = args.args[0];
+	of_node_put(args.np);
+
+	res = platform_get_resource(pdev, IORESOURCE_MEM, index);
+	if (!res) {
+		dev_err(dev, "failed to get mem resource %d\n", index);
+		return -ENODEV;
+	}
+
+	if (!request_mem_region(res->start, resource_size(res), res->name)) {
+		dev_err(dev, "failed to request resource %pR\n", res);
+		return -EBUSY;
+	}
+
+	base = ioremap(res->start, resource_size(res));
+	if (!base) {
+		dev_err(dev, "failed to map resource %pR\n", res);
+		ret = -ENOMEM;
+		goto release_region;
+	}
+
+	data->base = base;
+	data->res = res;
 
 	for (i = REG_FREQ_LUT_TABLE; i < REG_ARRAY_SIZE; i++)
 		data->reg_bases[i] = base + offsets[i];
@@ -187,6 +213,9 @@ static int mtk_cpu_resources_init(struct platform_device *pdev,
 	policy->driver_data = data;
 
 	return 0;
+release_region:
+	release_mem_region(res->start, resource_size(res));
+	return ret;
 }
 
 static int mtk_cpufreq_hw_cpu_init(struct cpufreq_policy *policy)
@@ -233,9 +262,13 @@ static int mtk_cpufreq_hw_cpu_init(struct cpufreq_policy *policy)
 static int mtk_cpufreq_hw_cpu_exit(struct cpufreq_policy *policy)
 {
 	struct mtk_cpufreq_data *data = policy->driver_data;
+	struct resource *res = data->res;
+	void __iomem *base = data->base;
 
 	/* HW should be in paused state now */
 	writel_relaxed(0x0, data->reg_bases[REG_FREQ_ENABLE]);
+	iounmap(base);
+	release_mem_region(res->start, resource_size(res));
 
 	return 0;
 }
@@ -283,19 +316,20 @@ static int mtk_cpufreq_hw_driver_probe(struct platform_device *pdev)
 	return ret;
 }
 
-static int mtk_cpufreq_hw_driver_remove(struct platform_device *pdev)
+static void mtk_cpufreq_hw_driver_remove(struct platform_device *pdev)
 {
-	return cpufreq_unregister_driver(&cpufreq_mtk_hw_driver);
+	cpufreq_unregister_driver(&cpufreq_mtk_hw_driver);
 }
 
 static const struct of_device_id mtk_cpufreq_hw_match[] = {
 	{ .compatible = "mediatek,cpufreq-hw", .data = &cpufreq_mtk_offsets },
 	{}
 };
+MODULE_DEVICE_TABLE(of, mtk_cpufreq_hw_match);
 
 static struct platform_driver mtk_cpufreq_hw_driver = {
 	.probe = mtk_cpufreq_hw_driver_probe,
-	.remove = mtk_cpufreq_hw_driver_remove,
+	.remove_new = mtk_cpufreq_hw_driver_remove,
 	.driver = {
 		.name = "mtk-cpufreq-hw",
 		.of_match_table = mtk_cpufreq_hw_match,

@@ -338,6 +338,8 @@ struct cio2_buffer {
 	unsigned int offset;
 };
 
+#define to_cio2_buffer(vb)	container_of(vb, struct cio2_buffer, vbb.vb2_buf)
+
 struct csi2_bus_info {
 	u32 port;
 	u32 lanes;
@@ -399,6 +401,8 @@ struct cio2_device {
 	dma_addr_t dummy_lop_bus_addr;
 };
 
+#define to_cio2_device(n)	container_of(n, struct cio2_device, notifier)
+
 /**************** Virtual channel ****************/
 /*
  * This should come from sensor driver. No
@@ -454,11 +458,5 @@ static inline struct cio2_queue *vb2q_to_cio2_queue(struct vb2_queue *vq)
 {
 	return container_of(vq, struct cio2_queue, vbq);
 }
-
-#if IS_ENABLED(CONFIG_CIO2_BRIDGE)
-int cio2_bridge_init(struct pci_dev *cio2);
-#else
-static inline int cio2_bridge_init(struct pci_dev *cio2) { return 0; }
-#endif
 
 #endif

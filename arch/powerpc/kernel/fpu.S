@@ -9,6 +9,7 @@
  *    Copyright (C) 1997 Dan Malek (dmalek@jlc.net).
  */
 
+#include <linux/export.h>
 #include <asm/reg.h>
 #include <asm/page.h>
 #include <asm/mmu.h>
@@ -18,7 +19,6 @@
 #include <asm/ppc_asm.h>
 #include <asm/asm-offsets.h>
 #include <asm/ptrace.h>
-#include <asm/export.h>
 #include <asm/asm-compat.h>
 #include <asm/feature-fixups.h>
 
@@ -81,7 +81,12 @@ EXPORT_SYMBOL(store_fp_state)
  */
 _GLOBAL(load_up_fpu)
 	mfmsr	r5
+#ifdef CONFIG_PPC_BOOK3S_64
+	/* interrupt doesn't set MSR[RI] and HPT can fault on current access */
+	ori	r5,r5,MSR_FP|MSR_RI
+#else
 	ori	r5,r5,MSR_FP
+#endif
 #ifdef CONFIG_VSX
 BEGIN_FTR_SECTION
 	oris	r5,r5,MSR_VSX@h

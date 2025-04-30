@@ -221,7 +221,6 @@ static int rpi_exp_gpio_probe(struct platform_device *pdev)
 	rpi_gpio->gc.parent = dev;
 	rpi_gpio->gc.label = MODULE_NAME;
 	rpi_gpio->gc.owner = THIS_MODULE;
-	rpi_gpio->gc.of_node = np;
 	rpi_gpio->gc.base = -1;
 	rpi_gpio->gc.ngpio = NUM_GPIO;
 
@@ -244,7 +243,7 @@ MODULE_DEVICE_TABLE(of, rpi_exp_gpio_ids);
 static struct platform_driver rpi_exp_gpio_driver = {
 	.driver	= {
 		.name		= MODULE_NAME,
-		.of_match_table	= of_match_ptr(rpi_exp_gpio_ids),
+		.of_match_table	= rpi_exp_gpio_ids,
 	},
 	.probe	= rpi_exp_gpio_probe,
 };

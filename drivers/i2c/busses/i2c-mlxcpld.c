@@ -22,12 +22,13 @@
 #define MLXCPLD_I2C_BUS_NUM		1
 #define MLXCPLD_I2C_DATA_REG_SZ		36
 #define MLXCPLD_I2C_DATA_SZ_BIT		BIT(5)
+#define MLXCPLD_I2C_DATA_EXT2_SZ_BIT	BIT(6)
 #define MLXCPLD_I2C_DATA_SZ_MASK	GENMASK(6, 5)
 #define MLXCPLD_I2C_SMBUS_BLK_BIT	BIT(7)
 #define MLXCPLD_I2C_MAX_ADDR_LEN	4
 #define MLXCPLD_I2C_RETR_NUM		2
 #define MLXCPLD_I2C_XFER_TO		500000 /* usec */
-#define MLXCPLD_I2C_POLL_TIME		400   /* usec */
+#define MLXCPLD_I2C_POLL_TIME		200   /* usec */
 
 /* LPC I2C registers */
 #define MLXCPLD_LPCI2C_CPBLTY_REG	0x0
@@ -40,7 +41,7 @@
 #define MLXCPLD_LPCI2C_STATUS_REG	0x9
 #define MLXCPLD_LPCI2C_DATA_REG		0xa
 
-/* LPC I2C masks and parametres */
+/* LPC I2C masks and parameters */
 #define MLXCPLD_LPCI2C_RST_SEL_MASK	0x1
 #define MLXCPLD_LPCI2C_TRANS_END	0x1
 #define MLXCPLD_LPCI2C_STATUS_NACK	0x10
@@ -49,7 +50,7 @@
 #define MLXCPLD_LPCI2C_NACK_IND		2
 
 #define MLXCPLD_I2C_FREQ_1000KHZ_SET	0x04
-#define MLXCPLD_I2C_FREQ_400KHZ_SET	0x0c
+#define MLXCPLD_I2C_FREQ_400KHZ_SET	0x0e
 #define MLXCPLD_I2C_FREQ_100KHZ_SET	0x42
 
 enum mlxcpld_i2c_frequency {
@@ -73,6 +74,7 @@ struct mlxcpld_i2c_priv {
 	struct  mlxcpld_i2c_curr_xfer xfer;
 	struct device *dev;
 	bool smbus_block;
+	int polling_time;
 };
 
 static void mlxcpld_i2c_lpc_write_buf(u8 *data, u8 len, u32 addr)
@@ -267,8 +269,8 @@ static int mlxcpld_i2c_wait_for_free(struct mlxcpld_i2c_priv *priv)
 	do {
 		if (!mlxcpld_i2c_check_busy(priv))
 			break;
-		usleep_range(MLXCPLD_I2C_POLL_TIME / 2, MLXCPLD_I2C_POLL_TIME);
-		timeout += MLXCPLD_I2C_POLL_TIME;
+		usleep_range(priv->polling_time / 2, priv->polling_time);
+		timeout += priv->polling_time;
 	} while (timeout <= MLXCPLD_I2C_XFER_TO);
 
 	if (timeout > MLXCPLD_I2C_XFER_TO)
@@ -288,10 +290,10 @@ static int mlxcpld_i2c_wait_for_tc(struct mlxcpld_i2c_priv *priv)
 	u8 datalen, val;
 
 	do {
-		usleep_range(MLXCPLD_I2C_POLL_TIME / 2, MLXCPLD_I2C_POLL_TIME);
+		usleep_range(priv->polling_time / 2, priv->polling_time);
 		if (!mlxcpld_i2c_check_status(priv, &status))
 			break;
-		timeout += MLXCPLD_I2C_POLL_TIME;
+		timeout += priv->polling_time;
 	} while (status == 0 && timeout < MLXCPLD_I2C_XFER_TO);
 
 	switch (status) {
@@ -465,6 +467,13 @@ static const struct i2c_adapter_quirks mlxcpld_i2c_quirks_ext = {
 	.max_comb_1st_msg_len = 4,
 };
 
+static const struct i2c_adapter_quirks mlxcpld_i2c_quirks_ext2 = {
+	.flags = I2C_AQ_COMB_WRITE_THEN_READ,
+	.max_read_len = (MLXCPLD_I2C_DATA_REG_SZ - 4) * 4,
+	.max_write_len = (MLXCPLD_I2C_DATA_REG_SZ - 4) * 4 + MLXCPLD_I2C_MAX_ADDR_LEN,
+	.max_comb_1st_msg_len = 4,
+};
+
 static struct i2c_adapter mlxcpld_i2c_adapter = {
 	.owner          = THIS_MODULE,
 	.name           = "i2c-mlxcpld",
@@ -498,9 +507,11 @@ mlxcpld_i2c_set_frequency(struct mlxcpld_i2c_priv *priv,
 	switch ((regval & data->mask) >> data->bit) {
 	case MLXCPLD_I2C_FREQ_1000KHZ:
 		freq = MLXCPLD_I2C_FREQ_1000KHZ_SET;
+		priv->polling_time /= 4;
 		break;
 	case MLXCPLD_I2C_FREQ_400KHZ:
 		freq = MLXCPLD_I2C_FREQ_400KHZ_SET;
+		priv->polling_time /= 4;
 		break;
 	default:
 		return 0;
@@ -527,6 +538,7 @@ static int mlxcpld_i2c_probe(struct platform_device *pdev)
 
 	priv->dev = &pdev->dev;
 	priv->base_addr = MLXPLAT_CPLD_LPC_I2C_BASE_ADDR;
+	priv->polling_time = MLXCPLD_I2C_POLL_TIME;
 
 	/* Set I2C bus frequency if platform data provides this info. */
 	pdata = dev_get_platdata(&pdev->dev);
@@ -543,6 +555,8 @@ static int mlxcpld_i2c_probe(struct platform_device *pdev)
 	/* Check support for extended transaction length */
 	if ((val & MLXCPLD_I2C_DATA_SZ_MASK) == MLXCPLD_I2C_DATA_SZ_BIT)
 		mlxcpld_i2c_adapter.quirks = &mlxcpld_i2c_quirks_ext;
+	else if ((val & MLXCPLD_I2C_DATA_SZ_MASK) == MLXCPLD_I2C_DATA_EXT2_SZ_BIT)
+		mlxcpld_i2c_adapter.quirks = &mlxcpld_i2c_quirks_ext2;
 	/* Check support for smbus block transaction */
 	if (val & MLXCPLD_I2C_SMBUS_BLK_BIT)
 		priv->smbus_block = true;
@@ -556,6 +570,10 @@ static int mlxcpld_i2c_probe(struct platform_device *pdev)
 	if (err)
 		goto mlxcpld_i2_probe_failed;
 
+	/* Notify caller when adapter is added. */
+	if (pdata && pdata->completion_notify)
+		pdata->completion_notify(pdata->handle, mlxcpld_i2c_adapter.nr);
+
 	return 0;
 
 mlxcpld_i2_probe_failed:
@@ -563,19 +581,17 @@ mlxcpld_i2_probe_failed:
 	return err;
 }
 
-static int mlxcpld_i2c_remove(struct platform_device *pdev)
+static void mlxcpld_i2c_remove(struct platform_device *pdev)
 {
 	struct mlxcpld_i2c_priv *priv = platform_get_drvdata(pdev);
 
 	i2c_del_adapter(&priv->adap);
 	mutex_destroy(&priv->lock);
-
-	return 0;
 }
 
 static struct platform_driver mlxcpld_i2c_driver = {
 	.probe		= mlxcpld_i2c_probe,
-	.remove		= mlxcpld_i2c_remove,
+	.remove_new	= mlxcpld_i2c_remove,
 	.driver = {
 		.name = MLXCPLD_I2C_DEVICE_NAME,
 	},

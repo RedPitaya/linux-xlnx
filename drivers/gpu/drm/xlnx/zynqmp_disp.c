@@ -14,7 +14,8 @@
 #include <drm/drm_atomic_uapi.h>
 #include <drm/drm_crtc.h>
 #include <drm/drm_crtc_helper.h>
-#include <drm/drm_fb_cma_helper.h>
+#include <drm/drm_fb_dma_helper.h>
+#include <drm/drm_framebuffer.h>
 #include <drm/drm_fourcc.h>
 #include <drm/drm_plane_helper.h>
 #include <drm/drm_vblank.h>
@@ -27,6 +28,7 @@
 #include <linux/interrupt.h>
 #include <linux/irqreturn.h>
 #include <linux/list.h>
+#include <linux/media-bus-format.h>
 #include <linux/module.h>
 #include <linux/mutex.h>
 #include <linux/of.h>
@@ -363,28 +365,6 @@ static void zynqmp_disp_clk_disable(struct clk *clk, bool *flag)
 		clk_disable_unprepare(clk);
 		*flag = false;
 	}
-}
-
-/**
- * zynqmp_disp_clk_enable_disable - Enable and disable the clock
- * @clk: clk device
- * @flag: flag if the clock is enabled
- *
- * This is to ensure the clock is disabled. The initial hardware state is
- * unknown, and this makes sure that the clock is disabled.
- *
- * Return: value from clk_prepare_enable().
- */
-static int zynqmp_disp_clk_enable_disable(struct clk *clk, bool *flag)
-{
-	int ret = 0;
-
-	if (!*flag) {
-		ret = clk_prepare_enable(clk);
-		clk_disable_unprepare(clk);
-	}
-
-	return ret;
 }
 
 /*
@@ -2129,9 +2109,9 @@ bool zynqmp_disp_aud_enabled(struct zynqmp_disp *disp)
  */
 unsigned int zynqmp_disp_get_aud_clk_rate(struct zynqmp_disp *disp)
 {
-	if (zynqmp_disp_aud_enabled(disp))
+	if (!zynqmp_disp_aud_enabled(disp))
 		return 0;
-	return clk_get_rate(disp->aclk);
+	return clk_get_rate(disp->audclk);
 }
 
 /**
@@ -2215,7 +2195,7 @@ static int zynqmp_disp_plane_mode_set(struct drm_plane *plane,
 		unsigned int height = src_h / (i ? info->vsub : 1);
 		int width_bytes;
 
-		paddr = drm_fb_cma_get_gem_addr(fb, plane->state, i);
+		paddr = drm_fb_dma_get_gem_addr(fb, plane->state, i);
 		if (!paddr) {
 			dev_err(dev, "failed to get a paddr\n");
 			return -EINVAL;
@@ -3100,10 +3080,6 @@ int zynqmp_disp_probe(struct platform_device *pdev)
 	disp->_pl_pclk = devm_clk_get(disp->dev, "dp_live_video_in_clk");
 	if (!IS_ERR(disp->_pl_pclk)) {
 		disp->pclk = disp->_pl_pclk;
-		ret = zynqmp_disp_clk_enable_disable(disp->pclk,
-						     &disp->pclk_en);
-		if (ret)
-			disp->pclk = NULL;
 	} else if (PTR_ERR(disp->_pl_pclk) == -EPROBE_DEFER) {
 		return PTR_ERR(disp->_pl_pclk);
 	}
@@ -3116,12 +3092,6 @@ int zynqmp_disp_probe(struct platform_device *pdev)
 			return PTR_ERR(disp->_ps_pclk);
 		}
 		disp->pclk = disp->_ps_pclk;
-		ret = zynqmp_disp_clk_enable_disable(disp->pclk,
-						     &disp->pclk_en);
-		if (ret) {
-			dev_err(disp->dev, "failed to init any video clock\n");
-			return ret;
-		}
 	}
 
 	disp->aclk = devm_clk_get(disp->dev, "dp_apb_clk");
@@ -3137,10 +3107,6 @@ int zynqmp_disp_probe(struct platform_device *pdev)
 	disp->_pl_audclk = devm_clk_get(disp->dev, "dp_live_audio_aclk");
 	if (!IS_ERR(disp->_pl_audclk)) {
 		disp->audclk = disp->_pl_audclk;
-		ret = zynqmp_disp_clk_enable_disable(disp->audclk,
-						     &disp->audclk_en);
-		if (ret)
-			disp->audclk = NULL;
 	}
 
 	/* If the live PL audio clock is not valid, fall back to PS clock */
@@ -3148,10 +3114,6 @@ int zynqmp_disp_probe(struct platform_device *pdev)
 		disp->_ps_audclk = devm_clk_get(disp->dev, "dp_aud_clk");
 		if (!IS_ERR(disp->_ps_audclk)) {
 			disp->audclk = disp->_ps_audclk;
-			ret = zynqmp_disp_clk_enable_disable(disp->audclk,
-							     &disp->audclk_en);
-			if (ret)
-				disp->audclk = NULL;
 		}
 
 		if (!disp->audclk) {

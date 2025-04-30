@@ -38,14 +38,17 @@ do {										\
 		pr_alert("%s" TORTURE_FLAG " %s\n", torture_type, s);		\
 	}									\
 } while (0)
-#define VERBOSE_TOROUT_ERRSTRING(s) \
-do {										\
-	if (verbose) {								\
-		verbose_torout_sleep();						\
-		pr_alert("%s" TORTURE_FLAG "!!! %s\n", torture_type, s);	\
-	}									\
-} while (0)
+#define TOROUT_ERRSTRING(s) \
+	pr_alert("%s" TORTURE_FLAG "!!! %s\n", torture_type, s)
 void verbose_torout_sleep(void);
+
+#define torture_init_error(firsterr)						\
+({										\
+	int ___firsterr = (firsterr);						\
+										\
+	WARN_ONCE(!IS_MODULE(CONFIG_RCU_TORTURE_TEST) && ___firsterr < 0, "Torture-test initialization failed with error code %d\n", ___firsterr); \
+	___firsterr < 0;								\
+})
 
 /* Definitions for online/offline exerciser. */
 #ifdef CONFIG_HOTPLUG_CPU
@@ -105,17 +108,20 @@ bool torture_must_stop(void);
 bool torture_must_stop_irq(void);
 void torture_kthread_stopping(char *title);
 int _torture_create_kthread(int (*fn)(void *arg), void *arg, char *s, char *m,
-			     char *f, struct task_struct **tp);
+			     char *f, struct task_struct **tp, void (*cbf)(struct task_struct *tp));
 void _torture_stop_kthread(char *m, struct task_struct **tp);
 
 #define torture_create_kthread(n, arg, tp) \
 	_torture_create_kthread(n, (arg), #n, "Creating " #n " task", \
-				"Failed to create " #n, &(tp))
+				"Failed to create " #n, &(tp), NULL)
+#define torture_create_kthread_cb(n, arg, tp, cbf) \
+	_torture_create_kthread(n, (arg), #n, "Creating " #n " task", \
+				"Failed to create " #n, &(tp), cbf)
 #define torture_stop_kthread(n, tp) \
 	_torture_stop_kthread("Stopping " #n " task", &(tp))
 
 #ifdef CONFIG_PREEMPTION
-#define torture_preempt_schedule() preempt_schedule()
+#define torture_preempt_schedule() __preempt_schedule()
 #else
 #define torture_preempt_schedule()	do { } while (0)
 #endif

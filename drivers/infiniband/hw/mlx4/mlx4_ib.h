@@ -38,6 +38,7 @@
 #include <linux/list.h>
 #include <linux/mutex.h>
 #include <linux/idr.h>
+#include <linux/notifier.h>
 
 #include <rdma/ib_verbs.h>
 #include <rdma/ib_umem.h>
@@ -601,7 +602,7 @@ struct mlx4_ib_counters {
 #define MLX4_DIAG_COUNTERS_TYPES 2
 
 struct mlx4_ib_diag_counters {
-	const char **name;
+	struct rdma_stat_desc *descs;
 	u32 *offset;
 	u32 num_counters;
 };
@@ -644,6 +645,7 @@ struct mlx4_ib_dev {
 	spinlock_t		reset_flow_resource_lock;
 	struct list_head		qp_list;
 	struct mlx4_ib_diag_counters diag_counters[MLX4_DIAG_COUNTERS_TYPES];
+	struct notifier_block	mlx_nb;
 };
 
 struct ib_event_work {
@@ -936,5 +938,11 @@ mlx4_ib_destroy_rwq_ind_table(struct ib_rwq_ind_table *wq_ind_table)
 }
 int mlx4_ib_umem_calc_optimal_mtt_size(struct ib_umem *umem, u64 start_va,
 				       int *num_of_mtts);
+
+int mlx4_ib_cm_init(void);
+void mlx4_ib_cm_destroy(void);
+
+int mlx4_ib_qp_event_init(void);
+void mlx4_ib_qp_event_cleanup(void);
 
 #endif /* MLX4_IB_H */

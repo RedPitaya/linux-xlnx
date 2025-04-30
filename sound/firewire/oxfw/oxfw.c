@@ -25,13 +25,14 @@
 #define MODEL_SATELLITE		0x00200f
 #define MODEL_SCS1M		0x001000
 #define MODEL_DUET_FW		0x01dddd
+#define MODEL_ONYX_1640I	0x001640
 
 #define SPECIFIER_1394TA	0x00a02d
 #define VERSION_AVC		0x010001
 
 MODULE_DESCRIPTION("Oxford Semiconductor FW970/971 driver");
 MODULE_AUTHOR("Clemens Ladisch <clemens@ladisch.de>");
-MODULE_LICENSE("GPL v2");
+MODULE_LICENSE("GPL");
 MODULE_ALIAS("snd-firewire-speakers");
 MODULE_ALIAS("snd-scs1x");
 
@@ -43,7 +44,7 @@ struct compat_info {
 
 static bool detect_loud_models(struct fw_unit *unit)
 {
-	const char *const models[] = {
+	static const char *const models[] = {
 		"Onyxi",
 		"Onyx-i",
 		"Onyx 1640i",
@@ -107,11 +108,11 @@ static int name_card(struct snd_oxfw *oxfw, const struct ieee1394_device_id *ent
 	strcpy(oxfw->card->mixername, m);
 	strcpy(oxfw->card->shortname, m);
 
-	snprintf(oxfw->card->longname, sizeof(oxfw->card->longname),
-		 "%s %s (OXFW%x %04x), GUID %08x%08x at %s, S%d",
-		 v, m, firmware >> 20, firmware & 0xffff,
-		 fw_dev->config_rom[3], fw_dev->config_rom[4],
-		 dev_name(&oxfw->unit->device), 100 << fw_dev->max_speed);
+	scnprintf(oxfw->card->longname, sizeof(oxfw->card->longname),
+		  "%s %s (OXFW%x %04x), GUID %08x%08x at %s, S%d",
+		  v, m, firmware >> 20, firmware & 0xffff,
+		  fw_dev->config_rom[3], fw_dev->config_rom[4],
+		  dev_name(&oxfw->unit->device), 100 << fw_dev->max_speed);
 end:
 	return err;
 }
@@ -192,6 +193,13 @@ static int detect_quirks(struct snd_oxfw *oxfw, const struct ieee1394_device_id 
 		// OXFW971-based models may transfer events by blocking method.
 		if (!(oxfw->quirks & SND_OXFW_QUIRK_JUMBO_PAYLOAD))
 			oxfw->quirks |= SND_OXFW_QUIRK_BLOCKING_TRANSMISSION;
+
+		if (model == MODEL_ONYX_1640I) {
+			//Unless receiving packets without NOINFO packet, the device transfers
+			//mostly half of events in packets than expected.
+			oxfw->quirks |= SND_OXFW_QUIRK_IGNORE_NO_INFO_PACKET |
+					SND_OXFW_QUIRK_VOLUNTARY_RECOVERY;
+		}
 	}
 
 	return 0;

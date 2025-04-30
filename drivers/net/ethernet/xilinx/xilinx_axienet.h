@@ -3,20 +3,21 @@
  * Definitions for Xilinx Axi Ethernet device driver.
  *
  * Copyright (c) 2009 Secret Lab Technologies, Ltd.
- * Copyright (c) 2010 - 2012 Xilinx, Inc. All rights reserved.
+ * Copyright (c) 2010 - 2022 Xilinx, Inc. All rights reserved.
+ * Copyright (c) 2022 Advanced Micro Devices, Inc.
  */
 
 #ifndef XILINX_AXIENET_H
 #define XILINX_AXIENET_H
 
+#include <linux/clk.h>
 #include <linux/netdevice.h>
 #include <linux/spinlock.h>
 #include <linux/interrupt.h>
 #include <linux/if_vlan.h>
+#include <linux/phylink.h>
 #include <linux/net_tstamp.h>
-#include <linux/phy.h>
 #include <linux/of_platform.h>
-#include <linux/clk.h>
 
 /* Packet size info */
 #define XAE_HDR_SIZE			14 /* Size of Ethernet header */
@@ -132,11 +133,11 @@
 #define XAXIDMA_IRQ_ERROR_MASK		0x00004000 /* Error interrupt */
 #define XAXIDMA_IRQ_ALL_MASK		0x00007000 /* All interrupts */
 
-/* Default TX/RX Threshold and waitbound values for SGDMA mode */
+/* Default TX/RX Threshold and delay timer values for SGDMA mode */
 #define XAXIDMA_DFT_TX_THRESHOLD	24
-#define XAXIDMA_DFT_TX_WAITBOUND	254
+#define XAXIDMA_DFT_TX_USEC		50
 #define XAXIDMA_DFT_RX_THRESHOLD	1
-#define XAXIDMA_DFT_RX_WAITBOUND	254
+#define XAXIDMA_DFT_RX_USEC		50
 
 #define XAXIDMA_BD_CTRL_TXSOF_MASK	0x08000000 /* First tx packet */
 #define XAXIDMA_BD_CTRL_TXEOF_MASK	0x04000000 /* Last tx packet */
@@ -336,7 +337,17 @@
 
 #define XAE_MDIO_DIV_DFT		29 /* Default MDIO clock divisor */
 
-/* Total number of entries in the hardware multicast table. */
+/* Defines for different options for C_PHY_TYPE parameter in Axi Ethernet IP */
+#define XAE_PHY_TYPE_MII		0
+#define XAE_PHY_TYPE_GMII		1
+#define XAE_PHY_TYPE_RGMII_1_3		2
+#define XAE_PHY_TYPE_RGMII_2_0		3
+#define XAE_PHY_TYPE_SGMII		4
+#define XAE_PHY_TYPE_1000BASE_X		5
+#define XAE_PHY_TYPE_2500		6
+#define XXE_PHY_TYPE_USXGMII		7
+
+ /* Total number of entries in the hardware multicast table. */
 #define XAE_MULTICAST_CAM_TABLE_NUM	4
 
 /* Axi Ethernet Synthesis features */
@@ -354,6 +365,9 @@
 
 #define DELAY_OF_ONE_MILLISEC		1000
 
+/* Xilinx PCS/PMA PHY register for switching 1000BaseX or SGMII */
+#define XLNX_MII_STD_SELECT_REG		0x11
+#define XLNX_MII_STD_SELECT_SGMII	BIT(0)
 #define XAXIENET_NAPI_WEIGHT		64
 
 /* Definition of 1588 PTP in Axi Ethernet IP */
@@ -374,10 +388,48 @@
 #define XXV_JUM_OFFSET			0x00000018
 #define XXV_TICKREG_OFFSET		0x00000020
 #define XXV_STATRX_BLKLCK_OFFSET	0x0000040C
-#define XXV_USXGMII_AN_OFFSET		0x000000C8
-#define XXV_USXGMII_AN_STS_OFFSET	0x00000458
+#define XXV_STAT_AN_STS_OFFSET	0x00000458
+#define XXV_STAT_CORE_SPEED_OFFSET	0x00000498
 #define XXV_STAT_GTWIZ_OFFSET		0x000004A0
 #define XXV_CONFIG_REVISION		0x00000024
+#define XXV_USXGMII_AN_OFFSET		0x000000C8
+#define XXV_USXGMII_AN_STS_OFFSET	0x00000458
+/* Switchable 1/10/25G MAC Register Definitions */
+#define XXVS_RESET_OFFSET		0x00000004
+#define XXVS_AN_CTL1_OFFSET		0x000000e0
+#define XXVS_AN_ABILITY_OFFSET		0x000000f8
+#define XXVS_LT_CTL_OFFSET		0x00000100
+#define XXVS_LT_TRAINED_OFFSET		0x00000104
+#define XXVS_LT_SEED_OFFSET		0x00000110
+#define XXVS_LT_COEF_OFFSET		0x00000130
+#define XXVS_SPEED_OFFSET		0x00000180
+
+#define XXVS_AN_STATUS_OFFSET		0x0000458
+#define XXVS_AN_LP_STATUS_OFFSET	0x000045C
+#define XXVS_LT_STATUS_OFFSET		0x000046C
+#define XXVS_RX_STATUS_REG1		0x00000404
+#define XXVS_TC_OFFSET			0x0000000C
+
+/* Switchable 1/10/25G MAC Register Mask Definitions */
+#define XXVS_RX_SERDES_RESET		BIT(28)
+#define XXVS_AN_ENABLE_MASK		BIT(0)
+#define XXVS_AN_BYPASS			BIT(1)
+#define XXVS_AN_1G_ABILITY_MASK		BIT(0)
+#define XXVS_AN_10G_ABILITY_MASK	BIT(1)
+#define XXVS_AN_25G_ABILITY_MASK	BIT(10)
+#define XXVS_LT_ENABLE_MASK		BIT(0)
+#define XXVS_LT_TRAINED_MASK		BIT(0)
+#define XXVS_AN_COMPLETE_MASK		BIT(2)
+#define XXVS_LT_DETECT_MASK		BIT(0)
+#define XXVS_SPEED_1G			BIT(0)
+#define	XXVS_SPEED_10G			BIT(1)
+#define XXVS_SPEED_25G			~(BIT(0) | BIT(1))
+#define XXVS_RX_STATUS_MASK		BIT(0)
+#define XXVS_RX_RESET			BIT(30)
+#define XXVS_TX_RESET			BIT(31)
+#define XXVS_CTRL_CORE_SPEED_SEL_CLEAR		~(BIT(6) | BIT(7))
+#define XXVS_CTRL_CORE_SPEED_SEL_1G		BIT(6)
+#define XXVS_CTRL_CORE_SPEED_SEL_10G	BIT(7)
 
 /* XXV MAC Register Mask Definitions */
 #define XXV_GT_RESET_MASK	BIT(0)
@@ -393,6 +445,14 @@
 #define XXV_GTWIZ_RESET_DONE	(BIT(0) | BIT(1))
 #define XXV_MAJ_MASK		GENMASK(7, 0)
 #define XXV_MIN_MASK		GENMASK(15, 8)
+#define XXV_AN_10G_ABILITY_MASK	(BIT(1) | BIT(2))
+#define XXV_AN_25G_ABILITY_MASK	(BIT(9) | BIT(10) | BIT(16) | BIT(17))
+#define XXV_AN_RESTART_MASK	BIT(11)
+#define XXV_AN_COMPLETE_MASK		BIT(2)
+#define XXV_TX_PAUSE_MASK	BIT(4)
+#define XXV_RX_PAUSE_MASK	BIT(5)
+#define XXV_STAT_CORE_SPEED_RTSW_MASK	BIT(1)
+#define XXV_STAT_CORE_SPEED_10G_MASK	BIT(0)
 
 /* USXGMII Register Mask Definitions  */
 #define USXGMII_AN_EN		BIT(5)
@@ -488,8 +548,24 @@
 #define XAE_TX_PTP_LEN		16
 #define XXV_TX_PTP_LEN		12
 
+/* Switching 1/10/25G MAC AN & LT seed values */
+#define XXVS_AN_NONCE_SEED		0x16C
+#define XXVS_AN_NONCE_SEED1		0x10
+#define XXVS_LT_SEED			0x605
+#define XXVS_LT_COEF_P1			0x1
+#define XXVS_LT_COEF_P1_SHIFT		6
+#define XXVS_LT_COEF_STATE0		0x1
+#define XXVS_LT_COEF_STATE0_SHIFT	8
+#define XXVS_LT_COEF_M1			0x1
+#define XXVS_LT_COEF_M1_SHIFT		10
+
+/* Switching 1/10/25G MAC "xlnx,runtime-switch" DT property value */
+#define XXVS_RT_SWITCH_1G_10G_25G		"1G / 10G / 25G"
+
+/* Default number of Tx descriptors */
+#define TX_BD_NUM_DEFAULT               128
+
 /* Macros used when AXI DMA h/w is configured without DRE */
-#define XAE_TX_BUFFERS		64
 #define XAE_MAX_PKT_LEN		8192
 
 /* MRMAC Register Definitions */
@@ -570,6 +646,64 @@
 
 #define MRMAC_GT_LANE_OFFSET		BIT(16)
 #define MRMAC_MAX_GT_LANES		4
+
+/* DCMAC Register Definitions */
+/* Global registers */
+#define DCMAC_G_MODE_OFFSET		0x00000004
+#define DCMAC_G_CTRL_RX_OFFSET		0x000000F0
+#define DCMAC_G_CTRL_TX_OFFSET		0x000000F8
+/* Port registers */
+#define DCMAC_P_CTRL_RX_OFFSET		0x000010F0
+#define DCMAC_P_CTRL_TX_OFFSET		0x000010F8
+#define DCMAC_STS_RX_PHY_OFFSET		0x00001C00
+/* Port channel registers */
+#define DCMAC_CH_CFG_TX_OFFSET		0x00001000
+#define DCMAC_CH_CFG_RX_OFFSET		0x00001004
+#define DCMAC_CH_CTRL_RX_OFFSET		0x00001030
+#define DCMAC_CH_CTRL_TX_OFFSET		0x00001038
+#define DCMAC_CH_MODE_TX_OFFSET		0x00001040
+#define DCMAC_CH_MODE_RX_OFFSET		0x00001044
+/* Status Registers */
+#define DCMAC_TX_STS_OFFSET		0X00001100
+#define DCMAC_RX_STS_OFFSET		0X00001140
+
+/* Register bit masks */
+#define DCMAC_TX_ACTV_PRT_ALL_MASK	(BIT(16) | BIT(18))
+#define DCMAC_RX_ACTV_PRT_ALL_MASK	(BIT(20) | BIT(22))
+#define DCMAC_RX_ERR_IND_STD_MASK	BIT(24)	/* FEC error indication mode as IEEE Standard */
+#define DCMAC_TX_FEC_UNIQUE_FLIP_MASK	BIT(25)
+#define DCMAC_RX_FEC_UNIQUE_FLIP_MASK	BIT(26)
+#define DCMAC_CH_RX_FCS_MASK		BIT(1)
+#define DCMAC_CH_RX_PREAMBLE_MASK	BIT(5)
+#define DCMAC_RX_IGNR_INRANGE_MASK	BIT(6)
+#define DCMAC_RX_MAX_PKT_LEN_MASK	(BIT(23) | BIT(24) | BIT(26) | BIT(29))
+#define DCMAC_CH_TX_FCS_MASK		BIT(0)
+#define DCMAC_CH_TX_IPG_MASK		(BIT(10) | BIT(11))
+#define DCMAC_P_SPEED_100G_MASK		~(BIT(0) | BIT(1))
+#define DCMAC_P_SPEED_200G_MASK	BIT(1)
+#define DCMAC_P_SPEED_400G_MASK	BIT(2)
+#define DCMAC_CH_TXMD_PM_TICK_INTERNAL_MASK	BIT(4)
+#define DCMAC_CH_RXMD_PM_TICK_INTERNAL_MASK	BIT(11)
+#define DCMAC_CH_MD_FEC_KR4		(BIT(16) | BIT(18))
+#define DCMAC_CH_MD_FEC_200G		BIT(19)
+#define DCMAC_CH_MD_FEC_400G		BIT(20)
+#define DCMAC_P_CTRL_CLR_SERDES		BIT(1)
+#define DCMAC_G_CTRL_RESET_ALL		GENMASK(2, 0)
+#define DCMAC_P_CTRL_CLEAR_ALL		(BIT(0) | BIT(1))
+#define DCMAC_CH_CTRL_CLEAR_STATE	BIT(0)
+#define DCMAC_RXPHY_RX_STS_MASK		BIT(0)
+#define DCMAC_RXPHY_RX_ALIGN_MASK	BIT(2)
+#define DCMAC_RELEASE_RESET		0x0
+#define DCMAC_GT_RESET_DONE_MASK	GENMASK(3, 0)
+
+/* DCMAC GT wrapper bitmasks */
+#define DCMAC_GT_RESET_ALL	BIT(0)
+#define DCMAC_GT_TX_PRECURSOR	(BIT(12) | BIT(13))	/* gt_txprecursor */
+#define DCMAC_GT_TX_POSTCURSOR	(BIT(18) | BIT(21))	/* gt_txpostcursor */
+#define DCMAC_GT_MAINCURSOR	(BIT(24) | BIT(25) | BIT(27) | BIT(30))	/* gt maincursor */
+
+#define DCMAC_GT_RXDPATH_RST	GENMASK(23, 0)
+
 /**
  * struct axidma_bd - Axi Dma buffer descriptor layout
  * @next:         MM2S/S2MM Next Descriptor Pointer
@@ -640,6 +774,7 @@ struct axidma_bd {
  *		   Otherwise reserved.
  * @tx_skb:	  Transmit skb address
  * @tx_desc_mapping: Tx Descriptor DMA mapping type.
+ * @page:	page buffer to access the data passed by GRO packet
  */
 struct aximcdma_bd {
 	phys_addr_t next;	/* Physical address of next buffer descriptor */
@@ -664,6 +799,7 @@ struct aximcdma_bd {
 	u32 ptp_tx_ts_tag;
 	phys_addr_t tx_skb;
 	u32 tx_desc_mapping;
+	struct page *page;
 } __aligned(XAXIDMA_BD_MINIMUM_ALIGNMENT);
 
 #define XAE_NUM_MISC_CLOCKS 3
@@ -676,44 +812,39 @@ struct aximcdma_bd {
 #define XAE_MAX_QUEUES		1
 #endif
 
+struct ethtool_rx_fs_list {
+	struct list_head list;
+	unsigned int count;
+};
+
 /**
  * struct axienet_local - axienet private per device data
  * @ndev:	Pointer for net_device to which it will be attached.
  * @dev:	Pointer to device structure
- * @phy_node:	Pointer to device node structure
+ * @phylink:	Pointer to phylink instance
+ * @phylink_config: phylink configuration settings
+ * @pcs_phy:	Reference to PCS/PMA PHY if used
+ * @pcs:	phylink pcs structure for PCS PHY
+ * @switch_x_sgmii: Whether switchable 1000BaseX/SGMII mode is enabled in the core
  * @axi_clk:	AXI4-Lite bus clock
  * @misc_clks:	Misc ethernet clocks (AXI4-Stream, Ref, MGT clocks)
  * @mii_bus:	Pointer to MII bus structure
  * @mii_clk_div: MII bus clock divider value
  * @regs_start: Resource start for axienet device addresses
  * @regs:	Base address for the axienet_local device address space
- * @mcdma_regs:	Base address for the aximcdma device address space
+ * @dma_err_tasklet: Tasklet structure to process Axi DMA errors
  * @napi:	Napi Structure array for all dma queues
+ * @mcdma_regs:	Base address for the aximcdma device address space
  * @num_tx_queues: Total number of Tx DMA queues
  * @num_rx_queues: Total number of Rx DMA queues
  * @dq:		DMA queues data
- * @phy_mode:	Phy type to identify between MII/GMII/RGMII/SGMII/1000 Base-X
- * @master:	Master endpoint
- * @slaves:	Front panel ports
- * @timer_priv: PTP timer private data pointer
- * @ptp_tx_irq: PTP tx irq
- * @ptp_rx_irq: PTP rx irq
- * @rtc_irq:	PTP RTC irq
- * @qbv_irq:	QBV shed irq
- * @ptp_ts_type: ptp time stamp type - 1 or 2 step mode
- * @ptp_rx_hw_pointer: ptp rx hw pointer
- * @ptp_rx_sw_pointer: ptp rx sw pointer
- * @ptp_txq:	PTP tx queue header
- * @tx_tstamp_work: PTP timestamping work queue
- * @qbv_regs:	pointer to qbv registers base address
- * @ptp_tx_lock: PTP tx lock
- * @dma_err_tasklet: Tasklet structure to process Axi DMA errors
+ * @phy_mode:  Phy type to identify between MII/GMII/RGMII/SGMII/1000 Base-X
+ * @ptp_tx_lock: PTP Tx lock
  * @eth_irq:	Axi Ethernet IRQ number
  * @options:	AxiEthernet option word
- * @last_link:	Phy link state in which the PHY was negotiated earlier
  * @features:	Stores the extended features supported by the axienet hw
- * @tx_bd_num:	Number of TX buffer descriptors.
- * @rx_bd_num:	Number of RX buffer descriptors.
+ * @tx_bd_num: Number of TX buffer descriptors.
+ * @rx_bd_num: Number of RX buffer descriptors.
  * @max_frm_size: Stores the maximum size of the frame that can be that
  *		  Txed/Rxed in the existing hardware. If jumbo option is
  *		  supported, the maximum frame size would be 9k. Else it is
@@ -722,11 +853,14 @@ struct aximcdma_bd {
  * @csum_offload_on_tx_path:	Stores the checksum selection on TX side.
  * @csum_offload_on_rx_path:	Stores the checksum selection on RX side.
  * @coalesce_count_rx:	Store the irq coalesce on RX side.
+ * @coalesce_usec_rx:	IRQ coalesce delay for RX
  * @coalesce_count_tx:	Store the irq coalesce on TX side.
- * @phy_flags:	Phy interface flags.
+ * @coalesce_usec_tx:	IRQ coalesce delay for TX
  * @eth_hasnobuf: Ethernet is configured in Non buf mode.
  * @eth_hasptp: Ethernet is configured for ptp.
  * @axienet_config: Ethernet config structure
+ * @ptp_os_cf: CF TS of PTP PDelay req for one step usage.
+ * @xxv_ip_version: XXV IP version
  * @tx_ts_regs:	  Base address for the axififo device address space.
  * @rx_ts_regs:	  Base address for the rx axififo device address space.
  * @tstamp_config: Hardware timestamp config structure.
@@ -744,19 +878,36 @@ struct aximcdma_bd {
  * @weight:   MCDMA Channel weight value to be configured for.
  * @dma_mask: Specify the width of the DMA address space.
  * @usxgmii_rate: USXGMII PHY speed.
- * @mrmac_rate: MRMAC speed.
+ * @max_speed: Maximum possible MAC speed.
  * @gt_pll: Common GT PLL mask control register space.
  * @gt_ctrl: GT speed and reset control register space.
+ * @gds_gt_ctrl:	GPIO descriptor array for GT control.
+ * @gds_gt_rx_dpath: GPIO descriptor array for GT Rx datapath reset.
+ * @gds_gt_tx_dpath: GPIO descriptor array for GT Tx datapath reset.
+ * @gds_gt_rsts: GPIO descriptor array for GT serdes and core reset.
+ * @gds_gt_tx_reset_done: GPIO descriptor array to get Tx reset status.
+ * @gds_gt_rx_reset_done: GPIO descriptor array to get Rx reset status.
  * @phc_index: Index to corresponding PTP clock used.
  * @gt_lane: MRMAC GT lane index used.
- * @ptp_os_cf: CF TS of PTP PDelay req for one step usage.
- * @xxv_ip_version: XXV IP version
+ * @switch_lock: Spinlock for switchable IP.
+ * @eoe_regs: Ethernet offload IP base address.
+ * @eoe_connected: Tells whether ethernet offload IP is connected to Ethernet IP.
+ * @eoe_features: EOE IP supported configuration.
+ * @inetaddr_notifier: Notifier callback function for specific event.
+ * @rx_fs_list: RX queue filter rule set.
+ * @assigned_rx_port: Ports assigned to GRO Queue.
  */
 struct axienet_local {
 	struct net_device *ndev;
 	struct device *dev;
 
-	struct device_node *phy_node;
+	struct phylink *phylink;
+	struct phylink_config phylink_config;
+
+	struct mdio_device *pcs_phy;
+	struct phylink_pcs pcs;
+
+	bool switch_x_sgmii;
 
 	struct clk *axi_clk;
 	struct clk_bulk_data misc_clks[XAE_NUM_MISC_CLOCKS];
@@ -776,15 +927,13 @@ struct axienet_local {
 	struct axienet_dma_q *dq[XAE_MAX_QUEUES];	/* DMA queue data*/
 
 	phy_interface_t phy_mode;
-
 	spinlock_t ptp_tx_lock;		/* PTP tx lock*/
 	int eth_irq;
 
-	u32 options;			/* Current options word */
-	u32 last_link;
+	u32 options;
 	u32 features;
 
-	u16 tx_bd_num;
+	u32 tx_bd_num;
 	u32 rx_bd_num;
 
 	u32 max_frm_size;
@@ -794,13 +943,16 @@ struct axienet_local {
 	int csum_offload_on_rx_path;
 
 	u32 coalesce_count_rx;
+	u32 coalesce_usec_rx;
 	u32 coalesce_count_tx;
-	u32 phy_flags;
+	u32 coalesce_usec_tx;
 	bool eth_hasnobuf;
 	bool eth_hasptp;
 	const struct axienet_config *axienet_config;
+	u64 ptp_os_cf;		/* CF TS of PTP PDelay req for one step usage */
+	u32 xxv_ip_version;
 
-#if defined(CONFIG_XILINX_AXI_EMAC_HWTSTAMP)
+#ifdef CONFIG_XILINX_AXI_EMAC_HWTSTAMP
 	void __iomem *tx_ts_regs;
 	void __iomem *rx_ts_regs;
 	struct hwtstamp_config tstamp_config;
@@ -824,13 +976,24 @@ struct axienet_local {
 	u8 dma_mask;
 	u32 usxgmii_rate;
 
-	u32 mrmac_rate;		/* MRMAC speed */
+	u32 max_speed;		/* Max MAC speed */
 	void __iomem *gt_pll;	/* Common GT PLL mask control register space */
 	void __iomem *gt_ctrl;	/* GT speed and reset control register space */
+	struct gpio_descs *gds_gt_ctrl;
+	struct gpio_descs *gds_gt_rx_dpath;
+	struct gpio_descs *gds_gt_tx_dpath;
+	struct gpio_descs *gds_gt_rsts;
+	struct gpio_descs *gds_gt_tx_reset_done;
+	struct gpio_descs *gds_gt_rx_reset_done;
 	u32 phc_index;		/* Index to corresponding PTP clock used  */
 	u32 gt_lane;		/* MRMAC GT lane index used */
-	u64 ptp_os_cf;		/* CF TS of PTP PDelay req for one step usage */
-	u32 xxv_ip_version;
+	spinlock_t switch_lock;	/* To protect Link training programming from multiple context */
+	void __iomem *eoe_regs;
+	bool eoe_connected;
+	u32 eoe_features;
+	struct notifier_block inetaddr_notifier;
+	struct ethtool_rx_fs_list rx_fs_list;
+	u16 assigned_rx_port[XAE_MAX_QUEUES];
 };
 
 /**
@@ -858,7 +1021,6 @@ struct axienet_local {
  *		completed.
  * @rx_bd_ci:	Stores the index of the Rx buffer descriptor in the ring being
  *		accessed currently.
- * @flags:      MCDMA management channel flags
  * @chan_id:    MCDMA channel to operate on.
  * @rx_offset:	MCDMA S2MM channel starting offset.
  * @txq_bd_v:	Virtual address of the MCDMA TX buffer descriptor ring
@@ -884,7 +1046,7 @@ struct axienet_dma_q {
 	dma_addr_t rx_bd_p;
 	dma_addr_t tx_bd_p;
 
-	unsigned char *tx_buf[XAE_TX_BUFFERS];
+	unsigned char *tx_buf[TX_BD_NUM_DEFAULT];
 	unsigned char *tx_bufs;
 	dma_addr_t tx_bufs_dma;
 	bool eth_hasdre;
@@ -912,19 +1074,21 @@ struct axienet_dma_q {
 /**
  * enum axienet_ip_type - AXIENET IP/MAC type.
  *
- * @XAXIENET_1G:	 IP is 1G MAC
- * @XAXIENET_2_5G:	 IP type is 2.5G MAC.
+ * @XAXIENET_1_2p5G:	 IP is 1G/2.5G
  * @XAXIENET_LEGACY_10G: IP type is legacy 10G MAC.
  * @XAXIENET_10G_25G:	 IP type is 10G/25G MAC(XXV MAC).
  * @XAXIENET_MRMAC:	 IP type is hardened Multi Rate MAC (MRMAC).
+ * @XAXIENET_1G_10G_25G: IP type is 1G/10G/25G MAC.
+ * @XAXIENET_DCMAC: IP type is 600G Channelized Multirate Ethernet (DCMAC)
  *
  */
 enum axienet_ip_type {
-	XAXIENET_1G = 0,
-	XAXIENET_2_5G,
+	XAXIENET_1_2p5G = 0,
 	XAXIENET_LEGACY_10G,
 	XAXIENET_10G_25G,
 	XAXIENET_MRMAC,
+	XAXIENET_1G_10G_25G,
+	XAXIENET_DCMAC,
 };
 
 struct axienet_config {
@@ -935,6 +1099,7 @@ struct axienet_config {
 			struct clk **dclk);
 	u32 tx_ptplen;
 	u8 ts_header_len;
+	int (*gt_reset)(struct net_device *ndev);
 };
 
 /**
@@ -977,6 +1142,18 @@ static inline u32 axienet_ior(struct axienet_local *lp, off_t offset)
 static inline u32 axinet_ior_read_mcr(struct axienet_local *lp)
 {
 	return axienet_ior(lp, XAE_MDIO_MCR_OFFSET);
+}
+
+static inline void axienet_lock_mii(struct axienet_local *lp)
+{
+	if (lp->mii_bus)
+		mutex_lock(&lp->mii_bus->mdio_lock);
+}
+
+static inline void axienet_unlock_mii(struct axienet_local *lp)
+{
+	if (lp->mii_bus)
+		mutex_unlock(&lp->mii_bus->mdio_lock);
 }
 
 /**
@@ -1125,14 +1302,10 @@ static inline void axienet_dma_bdout(struct axienet_dma_q *q,
 	writel(value, (q->dma_regs + reg));
 #endif
 }
+
 /* Function prototypes visible in xilinx_axienet_mdio.c for other files */
-int axienet_mdio_enable(struct axienet_local *lp);
-void axienet_mdio_disable(struct axienet_local *lp);
 int axienet_mdio_setup(struct axienet_local *lp);
 void axienet_mdio_teardown(struct axienet_local *lp);
-void axienet_adjust_link(struct net_device *ndev);
-
-int axienet_mdio_wait_until_ready(struct axienet_local *lp);
 void __maybe_unused axienet_bd_free(struct net_device *ndev,
 				    struct axienet_dma_q *q);
 int __maybe_unused axienet_dma_q_init(struct net_device *ndev,
@@ -1146,9 +1319,6 @@ void __axienet_device_reset(struct axienet_dma_q *q);
 void axienet_set_mac_address(struct net_device *ndev, const void *address);
 void axienet_set_multicast_list(struct net_device *ndev);
 int xaxienet_rx_poll(struct napi_struct *napi, int quota);
-void axienet_setoptions(struct net_device *ndev, u32 options);
-int axienet_queue_xmit(struct sk_buff *skb, struct net_device *ndev,
-		       u16 map);
 
 #if defined(CONFIG_AXIENET_HAS_MCDMA)
 int __maybe_unused axienet_mcdma_rx_q_init(struct net_device *ndev,
@@ -1184,5 +1354,6 @@ void axienet_tx_hwtstamp(struct axienet_local *lp,
 void axienet_tx_hwtstamp(struct axienet_local *lp,
 			 struct axidma_bd *cur_p);
 #endif
+u32 axienet_usec_to_timer(struct axienet_local *lp, u32 coalesce_usec);
 
 #endif /* XILINX_AXI_ENET_H */

@@ -88,8 +88,9 @@ static int __live_context_size(struct intel_engine_cs *engine)
 		goto err;
 
 	vaddr = i915_gem_object_pin_map_unlocked(ce->state->obj,
-						 i915_coherent_map_type(engine->i915,
-									ce->state->obj, false));
+						 intel_gt_coherent_map_type(engine->gt,
+									    ce->state->obj,
+									    false));
 	if (IS_ERR(vaddr)) {
 		err = PTR_ERR(vaddr);
 		intel_context_unpin(ce);
@@ -442,7 +443,7 @@ int intel_context_live_selftests(struct drm_i915_private *i915)
 		SUBTEST(live_active_context),
 		SUBTEST(live_remote_context),
 	};
-	struct intel_gt *gt = &i915->gt;
+	struct intel_gt *gt = to_gt(i915);
 
 	if (intel_gt_is_wedged(gt))
 		return 0;

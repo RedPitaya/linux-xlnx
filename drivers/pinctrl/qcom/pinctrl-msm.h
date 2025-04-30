@@ -5,25 +5,38 @@
 #ifndef __PINCTRL_MSM_H__
 #define __PINCTRL_MSM_H__
 
+#include <linux/pm.h>
+#include <linux/types.h>
+
+#include <linux/pinctrl/pinctrl.h>
+
+struct platform_device;
+
 struct pinctrl_pin_desc;
 
-/**
- * struct msm_function - a pinmux function
- * @name:    Name of the pinmux function.
- * @groups:  List of pingroups for this function.
- * @ngroups: Number of entries in @groups.
- */
-struct msm_function {
-	const char *name;
-	const char * const *groups;
-	unsigned ngroups;
-};
+#define APQ_PIN_FUNCTION(fname)					\
+	[APQ_MUX_##fname] = PINCTRL_PINFUNCTION(#fname,		\
+					fname##_groups,		\
+					ARRAY_SIZE(fname##_groups))
+
+#define IPQ_PIN_FUNCTION(fname)					\
+	[IPQ_MUX_##fname] = PINCTRL_PINFUNCTION(#fname,		\
+					fname##_groups,		\
+					ARRAY_SIZE(fname##_groups))
+
+#define MSM_PIN_FUNCTION(fname) 				\
+	[msm_mux_##fname] = PINCTRL_PINFUNCTION(#fname,		\
+					fname##_groups,		\
+					ARRAY_SIZE(fname##_groups))
+
+#define QCA_PIN_FUNCTION(fname)					\
+	[qca_mux_##fname] = PINCTRL_PINFUNCTION(#fname,		\
+					fname##_groups,		\
+					ARRAY_SIZE(fname##_groups))
 
 /**
  * struct msm_pingroup - Qualcomm pingroup definition
- * @name:                 Name of the pingroup.
- * @pins:	          A list of pins assigned to this pingroup.
- * @npins:	          Number of entries in @pins.
+ * @grp:                  Generic data of the pin group (name and pins)
  * @funcs:                A list of pinmux functions that can be selected for
  *                        this group. The index of the selected function is used
  *                        for programming the function selector.
@@ -46,6 +59,7 @@ struct msm_function {
  * @intr_status_bit:      Offset in @intr_status_reg for reading and acking the interrupt
  *                        status.
  * @intr_target_bit:      Offset in @intr_target_reg for configuring the interrupt routing.
+ * @intr_target_width:    Number of bits used for specifying interrupt routing target.
  * @intr_target_kpss_val: Value in @intr_target_bit for specifying that the interrupt from
  *                        this gpio should get routed to the KPSS processor.
  * @intr_raw_status_bit:  Offset in @intr_cfg_reg for the raw status bit.
@@ -56,9 +70,7 @@ struct msm_function {
  *                        otherwise 1.
  */
 struct msm_pingroup {
-	const char *name;
-	const unsigned *pins;
-	unsigned npins;
+	struct pingroup grp;
 
 	unsigned *funcs;
 	unsigned nfuncs;
@@ -75,8 +87,11 @@ struct msm_pingroup {
 
 	unsigned pull_bit:5;
 	unsigned drv_bit:5;
+	unsigned i2c_pull_bit:5;
 
 	unsigned od_bit:5;
+	unsigned egpio_enable:5;
+	unsigned egpio_present:5;
 	unsigned oe_bit:5;
 	unsigned in_bit:5;
 	unsigned out_bit:5;
@@ -86,6 +101,7 @@ struct msm_pingroup {
 	unsigned intr_ack_high:1;
 
 	unsigned intr_target_bit:5;
+	unsigned intr_target_width:5;
 	unsigned intr_target_kpss_val:5;
 	unsigned intr_raw_status_bit:5;
 	unsigned intr_polarity_bit:5;
@@ -119,11 +135,18 @@ struct msm_gpio_wakeirq_map {
  *                            to be aware that their parent can't handle dual
  *                            edge interrupts.
  * @gpio_func: Which function number is GPIO (usually 0).
+ * @egpio_func: If non-zero then this SoC supports eGPIO. Even though in
+ *              hardware this is a mux 1-level above the TLMM, we'll treat
+ *              it as if this is just another mux state of the TLMM. Since
+ *              it doesn't really map to hardware, we'll allocate a virtual
+ *              function number for eGPIO and any time we see that function
+ *              number used we'll treat it as a request to mux away from
+ *              our TLMM towards another owner.
  */
 struct msm_pinctrl_soc_data {
 	const struct pinctrl_pin_desc *pins;
 	unsigned npins;
-	const struct msm_function *functions;
+	const struct pinfunction *functions;
 	unsigned nfunctions;
 	const struct msm_pingroup *groups;
 	unsigned ngroups;
@@ -136,6 +159,7 @@ struct msm_pinctrl_soc_data {
 	unsigned int nwakeirq_map;
 	bool wakeirq_dual_edge_errata;
 	unsigned int gpio_func;
+	unsigned int egpio_func;
 };
 
 extern const struct dev_pm_ops msm_pinctrl_dev_pm_ops;

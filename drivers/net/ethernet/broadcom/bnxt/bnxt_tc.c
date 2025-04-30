@@ -373,9 +373,9 @@ static int bnxt_tc_parse_flow(struct bnxt *bp,
 	struct flow_dissector *dissector = rule->match.dissector;
 
 	/* KEY_CONTROL and KEY_BASIC are needed for forming a meaningful key */
-	if ((dissector->used_keys & BIT(FLOW_DISSECTOR_KEY_CONTROL)) == 0 ||
-	    (dissector->used_keys & BIT(FLOW_DISSECTOR_KEY_BASIC)) == 0) {
-		netdev_info(bp->dev, "cannot form TC key: used_keys = 0x%x\n",
+	if ((dissector->used_keys & BIT_ULL(FLOW_DISSECTOR_KEY_CONTROL)) == 0 ||
+	    (dissector->used_keys & BIT_ULL(FLOW_DISSECTOR_KEY_BASIC)) == 0) {
+		netdev_info(bp->dev, "cannot form TC key: used_keys = 0x%llx\n",
 			    dissector->used_keys);
 		return -EOPNOTSUPP;
 	}
@@ -1868,7 +1868,7 @@ static int bnxt_tc_setup_indr_block_cb(enum tc_setup_type type,
 	struct flow_cls_offload *flower = type_data;
 	struct bnxt *bp = priv->bp;
 
-	if (flower->common.chain_index)
+	if (!tc_cls_can_offload_and_chain0(bp->dev, type_data))
 		return -EOPNOTSUPP;
 
 	switch (type) {
@@ -1962,7 +1962,7 @@ static int bnxt_tc_setup_indr_cb(struct net_device *netdev, struct Qdisc *sch, v
 				 void *data,
 				 void (*cleanup)(struct flow_block_cb *block_cb))
 {
-	if (!bnxt_is_netdev_indr_offload(netdev))
+	if (!netdev || !bnxt_is_netdev_indr_offload(netdev))
 		return -EOPNOTSUPP;
 
 	switch (type) {

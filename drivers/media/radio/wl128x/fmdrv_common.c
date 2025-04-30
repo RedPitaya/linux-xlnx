@@ -23,6 +23,7 @@
 #include <linux/firmware.h>
 #include <linux/module.h>
 #include <linux/nospec.h>
+#include <linux/jiffies.h>
 
 #include "fmdrv.h"
 #include "fmdrv_v4l2.h"
@@ -342,7 +343,7 @@ static void send_tasklet(struct tasklet_struct *t)
 		return;
 
 	/* Check, is there any timeout happened to last transmitted packet */
-	if ((jiffies - fmdev->last_tx_jiffies) > FM_DRV_TX_TIMEOUT) {
+	if (time_is_before_jiffies(fmdev->last_tx_jiffies + FM_DRV_TX_TIMEOUT)) {
 		fmerr("TX timeout occurred\n");
 		atomic_set(&fmdev->tx_cnt, 1);
 	}
@@ -1233,9 +1234,8 @@ static int fm_download_firmware(struct fmdev *fmdev, const u8 *fw_name)
 	struct bts_action *action;
 	struct bts_action_delay *delay;
 	u8 *fw_data;
-	int ret, fw_len, cmd_cnt;
+	int ret, fw_len;
 
-	cmd_cnt = 0;
 	set_bit(FM_FW_DW_INPROGRESS, &fmdev->flag);
 
 	ret = request_firmware(&fw_entry, fw_name,
@@ -1271,7 +1271,6 @@ static int fm_download_firmware(struct fmdev *fmdev, const u8 *fw_name)
 			if (ret)
 				goto rel_fw;
 
-			cmd_cnt++;
 			break;
 
 		case ACTION_DELAY:	/* Delay */
@@ -1283,7 +1282,8 @@ static int fm_download_firmware(struct fmdev *fmdev, const u8 *fw_name)
 		fw_data += (sizeof(struct bts_action) + (action->size));
 		fw_len -= (sizeof(struct bts_action) + (action->size));
 	}
-	fmdbg("Firmware commands(%d) loaded to chip\n", cmd_cnt);
+	fmdbg("Transferred only %d of %d bytes of the firmware to chip\n",
+	      fw_entry->size - fw_len, fw_entry->size);
 rel_fw:
 	release_firmware(fw_entry);
 	clear_bit(FM_FW_DW_INPROGRESS, &fmdev->flag);
@@ -1441,7 +1441,7 @@ static long fm_st_receive(void *arg, struct sk_buff *skb)
 {
 	struct fmdev *fmdev;
 
-	fmdev = (struct fmdev *)arg;
+	fmdev = arg;
 
 	if (skb == NULL) {
 		fmerr("Invalid SKB received from ST\n");

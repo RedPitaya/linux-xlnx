@@ -32,15 +32,9 @@ MODULE_AUTHOR("Paul Diefenbaugh");
 MODULE_DESCRIPTION("ACPI AC Adapter Driver");
 MODULE_LICENSE("GPL");
 
-
 static int acpi_ac_add(struct acpi_device *device);
-static int acpi_ac_remove(struct acpi_device *device);
-static void acpi_ac_notify(struct acpi_device *device, u32 event);
-
-struct acpi_ac_bl {
-	const char *hid;
-	int hrv;
-};
+static void acpi_ac_remove(struct acpi_device *device);
+static void acpi_ac_notify(acpi_handle handle, u32 event, void *data);
 
 static const struct acpi_device_id ac_device_ids[] = {
 	{"ACPI0003", 0},
@@ -48,29 +42,21 @@ static const struct acpi_device_id ac_device_ids[] = {
 };
 MODULE_DEVICE_TABLE(acpi, ac_device_ids);
 
-/* Lists of PMIC ACPI HIDs with an (often better) native charger driver */
-static const struct acpi_ac_bl acpi_ac_blacklist[] = {
-	{ "INT33F4", -1 }, /* X-Powers AXP288 PMIC */
-	{ "INT34D3",  3 }, /* Intel Cherrytrail Whiskey Cove PMIC */
-};
-
 #ifdef CONFIG_PM_SLEEP
 static int acpi_ac_resume(struct device *dev);
 #endif
 static SIMPLE_DEV_PM_OPS(acpi_ac_pm, NULL, acpi_ac_resume);
 
 static int ac_sleep_before_get_state_ms;
-static int ac_check_pmic = 1;
+static int ac_only;
 
 static struct acpi_driver acpi_ac_driver = {
 	.name = "ac",
 	.class = ACPI_AC_CLASS,
 	.ids = ac_device_ids,
-	.flags = ACPI_DRIVER_ALL_NOTIFY_EVENTS,
 	.ops = {
 		.add = acpi_ac_add,
 		.remove = acpi_ac_remove,
-		.notify = acpi_ac_notify,
 		},
 	.drv.pm = &acpi_ac_pm,
 };
@@ -92,6 +78,11 @@ static int acpi_ac_get_state(struct acpi_ac *ac)
 
 	if (!ac)
 		return -EINVAL;
+
+	if (ac_only) {
+		ac->state = 1;
+		return 0;
+	}
 
 	status = acpi_evaluate_integer(ac->device->handle, "_PSR", NULL,
 				       &ac->state);
@@ -126,6 +117,7 @@ static int get_ac_property(struct power_supply *psy,
 	default:
 		return -EINVAL;
 	}
+
 	return 0;
 }
 
@@ -134,8 +126,9 @@ static enum power_supply_property ac_props[] = {
 };
 
 /* Driver Model */
-static void acpi_ac_notify(struct acpi_device *device, u32 event)
+static void acpi_ac_notify(acpi_handle handle, u32 event, void *data)
 {
+	struct acpi_device *device = data;
 	struct acpi_ac *ac = acpi_driver_data(device);
 
 	if (!ac)
@@ -194,28 +187,19 @@ static int __init thinkpad_e530_quirk(const struct dmi_system_id *d)
 	return 0;
 }
 
-static int __init ac_do_not_check_pmic_quirk(const struct dmi_system_id *d)
+static int __init ac_only_quirk(const struct dmi_system_id *d)
 {
-	ac_check_pmic = 0;
+	ac_only = 1;
 	return 0;
 }
 
 /* Please keep this list alphabetically sorted */
 static const struct dmi_system_id ac_dmi_table[]  __initconst = {
 	{
-		/* ECS EF20EA, AXP288 PMIC but uses separate fuel-gauge */
-		.callback = ac_do_not_check_pmic_quirk,
+		/* Kodlix GK45 returning incorrect state */
+		.callback = ac_only_quirk,
 		.matches = {
-			DMI_MATCH(DMI_PRODUCT_NAME, "EF20EA"),
-		},
-	},
-	{
-		/* Lenovo Ideapad Miix 320, AXP288 PMIC, separate fuel-gauge */
-		.callback = ac_do_not_check_pmic_quirk,
-		.matches = {
-			DMI_MATCH(DMI_SYS_VENDOR, "LENOVO"),
-			DMI_MATCH(DMI_PRODUCT_NAME, "80XF"),
-			DMI_MATCH(DMI_PRODUCT_VERSION, "Lenovo MIIX 320-10ICR"),
+			DMI_MATCH(DMI_PRODUCT_NAME, "GK45"),
 		},
 	},
 	{
@@ -250,7 +234,7 @@ static int acpi_ac_add(struct acpi_device *device)
 
 	result = acpi_ac_get_state(ac);
 	if (result)
-		goto end;
+		goto err_release_ac;
 
 	psy_cfg.drv_data = ac;
 
@@ -263,7 +247,7 @@ static int acpi_ac_add(struct acpi_device *device)
 					    &ac->charger_desc, &psy_cfg);
 	if (IS_ERR(ac->charger)) {
 		result = PTR_ERR(ac->charger);
-		goto end;
+		goto err_release_ac;
 	}
 
 	pr_info("%s [%s] (%s)\n", acpi_device_name(device),
@@ -271,9 +255,19 @@ static int acpi_ac_add(struct acpi_device *device)
 
 	ac->battery_nb.notifier_call = acpi_ac_battery_notify;
 	register_acpi_notifier(&ac->battery_nb);
-end:
+
+	result = acpi_dev_install_notify_handler(device, ACPI_ALL_NOTIFY,
+						 acpi_ac_notify);
 	if (result)
-		kfree(ac);
+		goto err_unregister;
+
+	return 0;
+
+err_unregister:
+	power_supply_unregister(ac->charger);
+	unregister_acpi_notifier(&ac->battery_nb);
+err_release_ac:
+	kfree(ac);
 
 	return result;
 }
@@ -296,49 +290,41 @@ static int acpi_ac_resume(struct device *dev)
 		return 0;
 	if (old_state != ac->state)
 		kobject_uevent(&ac->charger->dev.kobj, KOBJ_CHANGE);
+
 	return 0;
 }
 #else
 #define acpi_ac_resume NULL
 #endif
 
-static int acpi_ac_remove(struct acpi_device *device)
+static void acpi_ac_remove(struct acpi_device *device)
 {
 	struct acpi_ac *ac = NULL;
 
-
 	if (!device || !acpi_driver_data(device))
-		return -EINVAL;
+		return;
 
 	ac = acpi_driver_data(device);
 
+	acpi_dev_remove_notify_handler(device, ACPI_ALL_NOTIFY,
+				       acpi_ac_notify);
 	power_supply_unregister(ac->charger);
 	unregister_acpi_notifier(&ac->battery_nb);
 
 	kfree(ac);
-
-	return 0;
 }
 
 static int __init acpi_ac_init(void)
 {
-	unsigned int i;
 	int result;
 
 	if (acpi_disabled)
 		return -ENODEV;
 
-	dmi_check_system(ac_dmi_table);
+	if (acpi_quirk_skip_acpi_ac_and_battery())
+		return -ENODEV;
 
-	if (ac_check_pmic) {
-		for (i = 0; i < ARRAY_SIZE(acpi_ac_blacklist); i++)
-			if (acpi_dev_present(acpi_ac_blacklist[i].hid, "1",
-					     acpi_ac_blacklist[i].hrv)) {
-				pr_info("found native %s PMIC, not loading\n",
-					acpi_ac_blacklist[i].hid);
-				return -ENODEV;
-			}
-	}
+	dmi_check_system(ac_dmi_table);
 
 	result = acpi_bus_register_driver(&acpi_ac_driver);
 	if (result < 0)

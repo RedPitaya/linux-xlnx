@@ -2029,9 +2029,6 @@ static int snd_m3_mixer(struct snd_m3 *chip)
 {
 	struct snd_ac97_bus *pbus;
 	struct snd_ac97_template ac97;
-#ifndef CONFIG_SND_MAESTRO3_INPUT
-	struct snd_ctl_elem_id elem_id;
-#endif
 	int err;
 	static const struct snd_ac97_bus_ops ops = {
 		.write = snd_m3_ac97_write,
@@ -2054,14 +2051,10 @@ static int snd_m3_mixer(struct snd_m3 *chip)
 	snd_ac97_write(chip->ac97, AC97_PCM, 0);
 
 #ifndef CONFIG_SND_MAESTRO3_INPUT
-	memset(&elem_id, 0, sizeof(elem_id));
-	elem_id.iface = SNDRV_CTL_ELEM_IFACE_MIXER;
-	strcpy(elem_id.name, "Master Playback Switch");
-	chip->master_switch = snd_ctl_find_id(chip->card, &elem_id);
-	memset(&elem_id, 0, sizeof(elem_id));
-	elem_id.iface = SNDRV_CTL_ELEM_IFACE_MIXER;
-	strcpy(elem_id.name, "Master Playback Volume");
-	chip->master_volume = snd_ctl_find_id(chip->card, &elem_id);
+	chip->master_switch = snd_ctl_find_id_mixer(chip->card,
+						    "Master Playback Switch");
+	chip->master_volume = snd_ctl_find_id_mixer(chip->card,
+						    "Master Playback Volume");
 #endif
 
 	return 0;
@@ -2637,7 +2630,7 @@ snd_m3_create(struct snd_card *card, struct pci_dev *pci,
 /*
  */
 static int
-snd_m3_probe(struct pci_dev *pci, const struct pci_device_id *pci_id)
+__snd_m3_probe(struct pci_dev *pci, const struct pci_device_id *pci_id)
 {
 	static int dev;
 	struct snd_card *card;
@@ -2700,6 +2693,12 @@ snd_m3_probe(struct pci_dev *pci, const struct pci_device_id *pci_id)
 	pci_set_drvdata(pci, card);
 	dev++;
 	return 0;
+}
+
+static int
+snd_m3_probe(struct pci_dev *pci, const struct pci_device_id *pci_id)
+{
+	return snd_card_free_on_error(&pci->dev, __snd_m3_probe(pci, pci_id));
 }
 
 static struct pci_driver m3_driver = {

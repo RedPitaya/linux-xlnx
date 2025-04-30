@@ -1,9 +1,10 @@
 // SPDX-License-Identifier: GPL-2.0 OR BSD-3-Clause
 /*
  * Copyright (C) 2017 Intel Deutschland GmbH
- * Copyright (C) 2019-2021 Intel Corporation
+ * Copyright (C) 2019-2023 Intel Corporation
  */
 #include <linux/uuid.h>
+#include <linux/dmi.h>
 #include "iwl-drv.h"
 #include "iwl-debug.h"
 #include "acpi.h"
@@ -18,6 +19,63 @@ const guid_t iwl_rfi_guid = GUID_INIT(0x7266172C, 0x220B, 0x4B29,
 				      0x81, 0x4F, 0x75, 0xE4,
 				      0xDD, 0x26, 0xB5, 0xFD);
 IWL_EXPORT_SYMBOL(iwl_rfi_guid);
+
+static const struct dmi_system_id dmi_ppag_approved_list[] = {
+	{ .ident = "HP",
+	  .matches = {
+			DMI_MATCH(DMI_SYS_VENDOR, "HP"),
+		},
+	},
+	{ .ident = "SAMSUNG",
+	  .matches = {
+			DMI_MATCH(DMI_SYS_VENDOR, "SAMSUNG ELECTRONICS CO., LTD"),
+		},
+	},
+	{ .ident = "MSFT",
+	  .matches = {
+			DMI_MATCH(DMI_SYS_VENDOR, "Microsoft Corporation"),
+		},
+	},
+	{ .ident = "ASUS",
+	  .matches = {
+			DMI_MATCH(DMI_SYS_VENDOR, "ASUSTeK COMPUTER INC."),
+		},
+	},
+	{ .ident = "GOOGLE-HP",
+	  .matches = {
+			DMI_MATCH(DMI_SYS_VENDOR, "Google"),
+			DMI_MATCH(DMI_BOARD_VENDOR, "HP"),
+		},
+	},
+	{ .ident = "GOOGLE-ASUS",
+	  .matches = {
+			DMI_MATCH(DMI_SYS_VENDOR, "Google"),
+			DMI_MATCH(DMI_BOARD_VENDOR, "ASUSTek COMPUTER INC."),
+		},
+	},
+	{ .ident = "GOOGLE-SAMSUNG",
+	  .matches = {
+			DMI_MATCH(DMI_SYS_VENDOR, "Google"),
+			DMI_MATCH(DMI_BOARD_VENDOR, "SAMSUNG ELECTRONICS CO., LTD"),
+		},
+	},
+	{ .ident = "DELL",
+	  .matches = {
+			DMI_MATCH(DMI_SYS_VENDOR, "Dell Inc."),
+		},
+	},
+	{ .ident = "DELL",
+	  .matches = {
+			DMI_MATCH(DMI_SYS_VENDOR, "Alienware"),
+		},
+	},
+	{ .ident = "RAZER",
+	  .matches = {
+			DMI_MATCH(DMI_SYS_VENDOR, "Razer"),
+		},
+	},
+	{}
+};
 
 static int iwl_acpi_get_handle(struct device *dev, acpi_string method,
 			       acpi_handle *ret_handle)
@@ -41,7 +99,7 @@ static int iwl_acpi_get_handle(struct device *dev, acpi_string method,
 	return 0;
 }
 
-void *iwl_acpi_get_object(struct device *dev, acpi_string method)
+static void *iwl_acpi_get_object(struct device *dev, acpi_string method)
 {
 	struct acpi_buffer buf = {ACPI_ALLOCATE_BUFFER, NULL};
 	acpi_handle handle;
@@ -62,7 +120,6 @@ void *iwl_acpi_get_object(struct device *dev, acpi_string method)
 	}
 	return buf.pointer;
 }
-IWL_EXPORT_SYMBOL(iwl_acpi_get_object);
 
 /*
  * Generic function for evaluating a method defined in the device specific
@@ -184,9 +241,12 @@ int iwl_acpi_get_dsm_u32(struct device *dev, int rev, int func,
 }
 IWL_EXPORT_SYMBOL(iwl_acpi_get_dsm_u32);
 
-union acpi_object *iwl_acpi_get_wifi_pkg(struct device *dev,
-					 union acpi_object *data,
-					 int data_size, int *tbl_rev)
+static union acpi_object *
+iwl_acpi_get_wifi_pkg_range(struct device *dev,
+			    union acpi_object *data,
+			    int min_data_size,
+			    int max_data_size,
+			    int *tbl_rev)
 {
 	int i;
 	union acpi_object *wifi_pkg;
@@ -196,7 +256,7 @@ union acpi_object *iwl_acpi_get_wifi_pkg(struct device *dev,
 	 * describes the domain, and one more entry, otherwise there's
 	 * no point in reading it.
 	 */
-	if (WARN_ON_ONCE(data_size < 2))
+	if (WARN_ON_ONCE(min_data_size < 2 || min_data_size > max_data_size))
 		return ERR_PTR(-EINVAL);
 
 	/*
@@ -222,7 +282,8 @@ union acpi_object *iwl_acpi_get_wifi_pkg(struct device *dev,
 
 		/* skip entries that are not a package with the right size */
 		if (wifi_pkg->type != ACPI_TYPE_PACKAGE ||
-		    wifi_pkg->package.count != data_size)
+		    wifi_pkg->package.count < min_data_size ||
+		    wifi_pkg->package.count > max_data_size)
 			continue;
 
 		domain = &wifi_pkg->package.elements[0];
@@ -236,20 +297,28 @@ union acpi_object *iwl_acpi_get_wifi_pkg(struct device *dev,
 found:
 	return wifi_pkg;
 }
-IWL_EXPORT_SYMBOL(iwl_acpi_get_wifi_pkg);
+
+static union acpi_object *
+iwl_acpi_get_wifi_pkg(struct device *dev,
+		      union acpi_object *data,
+		      int data_size, int *tbl_rev)
+{
+	return iwl_acpi_get_wifi_pkg_range(dev, data, data_size, data_size,
+					   tbl_rev);
+}
+
 
 int iwl_acpi_get_tas(struct iwl_fw_runtime *fwrt,
-		     __le32 *block_list_array,
-		     int *block_list_size)
+		     union iwl_tas_config_cmd *cmd, int fw_ver)
 {
 	union acpi_object *wifi_pkg, *data;
-	int ret, tbl_rev, i;
-	bool enabled;
+	int ret, tbl_rev, i, block_list_size, enabled;
 
 	data = iwl_acpi_get_object(fwrt->dev, ACPI_WTAS_METHOD);
 	if (IS_ERR(data))
 		return PTR_ERR(data);
 
+	/* try to read wtas table revision 1 or revision 0*/
 	wifi_pkg = iwl_acpi_get_wifi_pkg(fwrt->dev, data,
 					 ACPI_WTAS_WIFI_DATA_SIZE,
 					 &tbl_rev);
@@ -258,40 +327,62 @@ int iwl_acpi_get_tas(struct iwl_fw_runtime *fwrt,
 		goto out_free;
 	}
 
-	if (wifi_pkg->package.elements[0].type != ACPI_TYPE_INTEGER ||
-	    tbl_rev != 0) {
+	if (tbl_rev == 1 && wifi_pkg->package.elements[1].type ==
+		ACPI_TYPE_INTEGER) {
+		u32 tas_selection =
+			(u32)wifi_pkg->package.elements[1].integer.value;
+		u16 override_iec =
+			(tas_selection & ACPI_WTAS_OVERRIDE_IEC_MSK) >> ACPI_WTAS_OVERRIDE_IEC_POS;
+		u16 enabled_iec = (tas_selection & ACPI_WTAS_ENABLE_IEC_MSK) >>
+			ACPI_WTAS_ENABLE_IEC_POS;
+		u8 usa_tas_uhb = (tas_selection & ACPI_WTAS_USA_UHB_MSK) >> ACPI_WTAS_USA_UHB_POS;
+
+
+		enabled = tas_selection & ACPI_WTAS_ENABLED_MSK;
+		if (fw_ver <= 3) {
+			cmd->v3.override_tas_iec = cpu_to_le16(override_iec);
+			cmd->v3.enable_tas_iec = cpu_to_le16(enabled_iec);
+		} else {
+			cmd->v4.usa_tas_uhb_allowed = usa_tas_uhb;
+			cmd->v4.override_tas_iec = (u8)override_iec;
+			cmd->v4.enable_tas_iec = (u8)enabled_iec;
+		}
+
+	} else if (tbl_rev == 0 &&
+		wifi_pkg->package.elements[1].type == ACPI_TYPE_INTEGER) {
+		enabled = !!wifi_pkg->package.elements[1].integer.value;
+	} else {
 		ret = -EINVAL;
 		goto out_free;
 	}
 
-	enabled = !!wifi_pkg->package.elements[1].integer.value;
-
 	if (!enabled) {
-		*block_list_size = -1;
 		IWL_DEBUG_RADIO(fwrt, "TAS not enabled\n");
 		ret = 0;
 		goto out_free;
 	}
 
+	IWL_DEBUG_RADIO(fwrt, "Reading TAS table revision %d\n", tbl_rev);
 	if (wifi_pkg->package.elements[2].type != ACPI_TYPE_INTEGER ||
 	    wifi_pkg->package.elements[2].integer.value >
 	    APCI_WTAS_BLACK_LIST_MAX) {
 		IWL_DEBUG_RADIO(fwrt, "TAS invalid array size %llu\n",
-				wifi_pkg->package.elements[1].integer.value);
+				wifi_pkg->package.elements[2].integer.value);
 		ret = -EINVAL;
 		goto out_free;
 	}
-	*block_list_size = wifi_pkg->package.elements[2].integer.value;
+	block_list_size = wifi_pkg->package.elements[2].integer.value;
+	cmd->v4.block_list_size = cpu_to_le32(block_list_size);
 
-	IWL_DEBUG_RADIO(fwrt, "TAS array size %d\n", *block_list_size);
-	if (*block_list_size > APCI_WTAS_BLACK_LIST_MAX) {
+	IWL_DEBUG_RADIO(fwrt, "TAS array size %u\n", block_list_size);
+	if (block_list_size > APCI_WTAS_BLACK_LIST_MAX) {
 		IWL_DEBUG_RADIO(fwrt, "TAS invalid array size value %u\n",
-				*block_list_size);
+				block_list_size);
 		ret = -EINVAL;
 		goto out_free;
 	}
 
-	for (i = 0; i < *block_list_size; i++) {
+	for (i = 0; i < block_list_size; i++) {
 		u32 country;
 
 		if (wifi_pkg->package.elements[3 + i].type !=
@@ -303,11 +394,11 @@ int iwl_acpi_get_tas(struct iwl_fw_runtime *fwrt,
 		}
 
 		country = wifi_pkg->package.elements[3 + i].integer.value;
-		block_list_array[i] = cpu_to_le32(country);
+		cmd->v4.block_list_array[i] = cpu_to_le32(country);
 		IWL_DEBUG_RADIO(fwrt, "TAS block list country %d\n", country);
 	}
 
-	ret = 0;
+	ret = 1;
 out_free:
 	kfree(data);
 	return ret;
@@ -513,8 +604,8 @@ IWL_EXPORT_SYMBOL(iwl_sar_select_profile);
 int iwl_sar_get_wrds_table(struct iwl_fw_runtime *fwrt)
 {
 	union acpi_object *wifi_pkg, *table, *data;
-	bool enabled;
 	int ret, tbl_rev;
+	u32 flags;
 	u8 num_chains, num_sub_bands;
 
 	data = iwl_acpi_get_object(fwrt->dev, ACPI_WRDS_METHOD);
@@ -580,7 +671,8 @@ read_table:
 
 	IWL_DEBUG_RADIO(fwrt, "Reading WRDS tbl_rev=%d\n", tbl_rev);
 
-	enabled = !!(wifi_pkg->package.elements[1].integer.value);
+	flags = wifi_pkg->package.elements[1].integer.value;
+	fwrt->reduced_power_flags = flags >> IWL_REDUCE_POWER_FLAGS_POS;
 
 	/* position of the actual table */
 	table = &wifi_pkg->package.elements[2];
@@ -588,7 +680,8 @@ read_table:
 	/* The profile from WRDS is officially profile 1, but goes
 	 * into sar_profiles[0] (because we don't have a profile 0).
 	 */
-	ret = iwl_sar_set_profile(table, &fwrt->sar_profiles[0], enabled,
+	ret = iwl_sar_set_profile(table, &fwrt->sar_profiles[0],
+				  flags & IWL_SAR_ENABLE_MSK,
 				  num_chains, num_sub_bands);
 out_free:
 	kfree(data);
@@ -707,49 +800,103 @@ int iwl_sar_get_wgds_table(struct iwl_fw_runtime *fwrt)
 {
 	union acpi_object *wifi_pkg, *data;
 	int i, j, k, ret, tbl_rev;
-	int idx = 1; /* start from one to skip the domain */
-	u8 num_bands;
+	u8 num_bands, num_profiles;
+	static const struct {
+		u8 revisions;
+		u8 bands;
+		u8 profiles;
+		u8 min_profiles;
+	} rev_data[] = {
+		{
+			.revisions = BIT(3),
+			.bands = ACPI_GEO_NUM_BANDS_REV2,
+			.profiles = ACPI_NUM_GEO_PROFILES_REV3,
+			.min_profiles = 3,
+		},
+		{
+			.revisions = BIT(2),
+			.bands = ACPI_GEO_NUM_BANDS_REV2,
+			.profiles = ACPI_NUM_GEO_PROFILES,
+		},
+		{
+			.revisions = BIT(0) | BIT(1),
+			.bands = ACPI_GEO_NUM_BANDS_REV0,
+			.profiles = ACPI_NUM_GEO_PROFILES,
+		},
+	};
+	int idx;
+	/* start from one to skip the domain */
+	int entry_idx = 1;
+
+	BUILD_BUG_ON(ACPI_NUM_GEO_PROFILES_REV3 != IWL_NUM_GEO_PROFILES_V3);
+	BUILD_BUG_ON(ACPI_NUM_GEO_PROFILES != IWL_NUM_GEO_PROFILES);
 
 	data = iwl_acpi_get_object(fwrt->dev, ACPI_WGDS_METHOD);
 	if (IS_ERR(data))
 		return PTR_ERR(data);
 
-	/* start by trying to read revision 2 */
-	wifi_pkg = iwl_acpi_get_wifi_pkg(fwrt->dev, data,
-					 ACPI_WGDS_WIFI_DATA_SIZE_REV2,
-					 &tbl_rev);
-	if (!IS_ERR(wifi_pkg)) {
-		if (tbl_rev != 2) {
-			ret = PTR_ERR(wifi_pkg);
-			goto out_free;
+	/* read the highest revision we understand first */
+	for (idx = 0; idx < ARRAY_SIZE(rev_data); idx++) {
+		/* min_profiles != 0 requires num_profiles header */
+		u32 hdr_size = 1 + !!rev_data[idx].min_profiles;
+		u32 profile_size = ACPI_GEO_PER_CHAIN_SIZE *
+				   rev_data[idx].bands;
+		u32 max_size = hdr_size + profile_size * rev_data[idx].profiles;
+		u32 min_size;
+
+		if (!rev_data[idx].min_profiles)
+			min_size = max_size;
+		else
+			min_size = hdr_size +
+				   profile_size * rev_data[idx].min_profiles;
+
+		wifi_pkg = iwl_acpi_get_wifi_pkg_range(fwrt->dev, data,
+						       min_size, max_size,
+						       &tbl_rev);
+		if (!IS_ERR(wifi_pkg)) {
+			if (!(BIT(tbl_rev) & rev_data[idx].revisions))
+				continue;
+
+			num_bands = rev_data[idx].bands;
+			num_profiles = rev_data[idx].profiles;
+
+			if (rev_data[idx].min_profiles) {
+				/* read header that says # of profiles */
+				union acpi_object *entry;
+
+				entry = &wifi_pkg->package.elements[entry_idx];
+				entry_idx++;
+				if (entry->type != ACPI_TYPE_INTEGER ||
+				    entry->integer.value > num_profiles) {
+					ret = -EINVAL;
+					goto out_free;
+				}
+				num_profiles = entry->integer.value;
+
+				/*
+				 * this also validates >= min_profiles since we
+				 * otherwise wouldn't have gotten the data when
+				 * looking up in ACPI
+				 */
+				if (wifi_pkg->package.count !=
+				    hdr_size + profile_size * num_profiles) {
+					ret = -EINVAL;
+					goto out_free;
+				}
+			}
+			goto read_table;
 		}
-
-		num_bands = ACPI_GEO_NUM_BANDS_REV2;
-
-		goto read_table;
 	}
 
-	/* then try revision 0 (which is the same as 1) */
-	wifi_pkg = iwl_acpi_get_wifi_pkg(fwrt->dev, data,
-					 ACPI_WGDS_WIFI_DATA_SIZE_REV0,
-					 &tbl_rev);
-	if (!IS_ERR(wifi_pkg)) {
-		if (tbl_rev != 0 && tbl_rev != 1) {
-			ret = PTR_ERR(wifi_pkg);
-			goto out_free;
-		}
-
-		num_bands = ACPI_GEO_NUM_BANDS_REV0;
-
-		goto read_table;
-	}
-
-	ret = PTR_ERR(wifi_pkg);
+	if (idx < ARRAY_SIZE(rev_data))
+		ret = PTR_ERR(wifi_pkg);
+	else
+		ret = -ENOENT;
 	goto out_free;
 
 read_table:
 	fwrt->geo_rev = tbl_rev;
-	for (i = 0; i < ACPI_NUM_GEO_PROFILES; i++) {
+	for (i = 0; i < num_profiles; i++) {
 		for (j = 0; j < ACPI_GEO_NUM_BANDS_REV2; j++) {
 			union acpi_object *entry;
 
@@ -762,7 +909,8 @@ read_table:
 				fwrt->geo_profiles[i].bands[j].max =
 					fwrt->geo_profiles[i].bands[1].max;
 			} else {
-				entry = &wifi_pkg->package.elements[idx++];
+				entry = &wifi_pkg->package.elements[entry_idx];
+				entry_idx++;
 				if (entry->type != ACPI_TYPE_INTEGER ||
 				    entry->integer.value > U8_MAX) {
 					ret = -EINVAL;
@@ -779,7 +927,8 @@ read_table:
 					fwrt->geo_profiles[i].bands[j].chains[k] =
 						fwrt->geo_profiles[i].bands[1].chains[k];
 				} else {
-					entry = &wifi_pkg->package.elements[idx++];
+					entry = &wifi_pkg->package.elements[entry_idx];
+					entry_idx++;
 					if (entry->type != ACPI_TYPE_INTEGER ||
 					    entry->integer.value > U8_MAX) {
 						ret = -EINVAL;
@@ -793,6 +942,8 @@ read_table:
 		}
 	}
 
+	fwrt->geo_num_profiles = num_profiles;
+	fwrt->geo_enabled = true;
 	ret = 0;
 out_free:
 	kfree(data);
@@ -803,10 +954,10 @@ IWL_EXPORT_SYMBOL(iwl_sar_get_wgds_table);
 bool iwl_sar_geo_support(struct iwl_fw_runtime *fwrt)
 {
 	/*
-	 * The GEO_TX_POWER_LIMIT command is not supported on earlier
-	 * firmware versions.  Unfortunately, we don't have a TLV API
-	 * flag to rely on, so rely on the major version which is in
-	 * the first byte of ucode_ver.  This was implemented
+	 * The PER_CHAIN_LIMIT_OFFSET_CMD command is not supported on
+	 * earlier firmware versions.  Unfortunately, we don't have a
+	 * TLV API flag to rely on, so rely on the major version which
+	 * is in the first byte of ucode_ver.  This was implemented
 	 * initially on version 38 and then backported to 17.  It was
 	 * also backported to 29, but only for 7265D devices.  The
 	 * intention was to have it in 36 as well, but not all 8000
@@ -814,22 +965,27 @@ bool iwl_sar_geo_support(struct iwl_fw_runtime *fwrt)
 	 * only one using version 36, so skip this version entirely.
 	 */
 	return IWL_UCODE_SERIAL(fwrt->fw->ucode_ver) >= 38 ||
-	       IWL_UCODE_SERIAL(fwrt->fw->ucode_ver) == 17 ||
-	       (IWL_UCODE_SERIAL(fwrt->fw->ucode_ver) == 29 &&
-		((fwrt->trans->hw_rev & CSR_HW_REV_TYPE_MSK) ==
-		 CSR_HW_REV_TYPE_7265D));
+		(IWL_UCODE_SERIAL(fwrt->fw->ucode_ver) == 17 &&
+		 fwrt->trans->hw_rev != CSR_HW_REV_TYPE_3160) ||
+		(IWL_UCODE_SERIAL(fwrt->fw->ucode_ver) == 29 &&
+		 ((fwrt->trans->hw_rev & CSR_HW_REV_TYPE_MSK) ==
+		  CSR_HW_REV_TYPE_7265D));
 }
 IWL_EXPORT_SYMBOL(iwl_sar_geo_support);
 
 int iwl_sar_geo_init(struct iwl_fw_runtime *fwrt,
-		     struct iwl_per_chain_offset *table, u32 n_bands)
+		     struct iwl_per_chain_offset *table,
+		     u32 n_bands, u32 n_profiles)
 {
 	int i, j;
+
+	if (!fwrt->geo_enabled)
+		return -ENODATA;
 
 	if (!iwl_sar_geo_support(fwrt))
 		return -EOPNOTSUPP;
 
-	for (i = 0; i < ACPI_NUM_GEO_PROFILES; i++) {
+	for (i = 0; i < n_profiles; i++) {
 		for (j = 0; j < n_bands; j++) {
 			struct iwl_per_chain_offset *chain =
 				&table[i * n_bands + j];
@@ -886,3 +1042,251 @@ __le32 iwl_acpi_get_lari_config_bitmap(struct iwl_fw_runtime *fwrt)
 	return config_bitmap;
 }
 IWL_EXPORT_SYMBOL(iwl_acpi_get_lari_config_bitmap);
+
+int iwl_acpi_get_ppag_table(struct iwl_fw_runtime *fwrt)
+{
+	union acpi_object *wifi_pkg, *data, *flags;
+	int i, j, ret, tbl_rev, num_sub_bands = 0;
+	int idx = 2;
+	u8 cmd_ver;
+
+	fwrt->ppag_flags = 0;
+	fwrt->ppag_table_valid = false;
+
+	data = iwl_acpi_get_object(fwrt->dev, ACPI_PPAG_METHOD);
+	if (IS_ERR(data))
+		return PTR_ERR(data);
+
+	/* try to read ppag table rev 2 or 1 (both have the same data size) */
+	wifi_pkg = iwl_acpi_get_wifi_pkg(fwrt->dev, data,
+				ACPI_PPAG_WIFI_DATA_SIZE_V2, &tbl_rev);
+
+	if (!IS_ERR(wifi_pkg)) {
+		if (tbl_rev == 1 || tbl_rev == 2) {
+			num_sub_bands = IWL_NUM_SUB_BANDS_V2;
+			IWL_DEBUG_RADIO(fwrt,
+					"Reading PPAG table v2 (tbl_rev=%d)\n",
+					tbl_rev);
+			goto read_table;
+		} else {
+			ret = -EINVAL;
+			goto out_free;
+		}
+	}
+
+	/* try to read ppag table revision 0 */
+	wifi_pkg = iwl_acpi_get_wifi_pkg(fwrt->dev, data,
+			ACPI_PPAG_WIFI_DATA_SIZE_V1, &tbl_rev);
+
+	if (!IS_ERR(wifi_pkg)) {
+		if (tbl_rev != 0) {
+			ret = -EINVAL;
+			goto out_free;
+		}
+		num_sub_bands = IWL_NUM_SUB_BANDS_V1;
+		IWL_DEBUG_RADIO(fwrt, "Reading PPAG table v1 (tbl_rev=0)\n");
+		goto read_table;
+	}
+
+read_table:
+	fwrt->ppag_ver = tbl_rev;
+	flags = &wifi_pkg->package.elements[1];
+
+	if (flags->type != ACPI_TYPE_INTEGER) {
+		ret = -EINVAL;
+		goto out_free;
+	}
+
+	fwrt->ppag_flags = flags->integer.value & ACPI_PPAG_MASK;
+	cmd_ver = iwl_fw_lookup_cmd_ver(fwrt->fw,
+					WIDE_ID(PHY_OPS_GROUP,
+						PER_PLATFORM_ANT_GAIN_CMD),
+					IWL_FW_CMD_VER_UNKNOWN);
+	if (cmd_ver == IWL_FW_CMD_VER_UNKNOWN) {
+		ret = -EINVAL;
+		goto out_free;
+	}
+	if (!fwrt->ppag_flags && cmd_ver <= 3) {
+		ret = 0;
+		goto out_free;
+	}
+
+	/*
+	 * read, verify gain values and save them into the PPAG table.
+	 * first sub-band (j=0) corresponds to Low-Band (2.4GHz), and the
+	 * following sub-bands to High-Band (5GHz).
+	 */
+	for (i = 0; i < IWL_NUM_CHAIN_LIMITS; i++) {
+		for (j = 0; j < num_sub_bands; j++) {
+			union acpi_object *ent;
+
+			ent = &wifi_pkg->package.elements[idx++];
+			if (ent->type != ACPI_TYPE_INTEGER) {
+				ret = -EINVAL;
+				goto out_free;
+			}
+
+			fwrt->ppag_chains[i].subbands[j] = ent->integer.value;
+			/* from ver 4 the fw deals with out of range values */
+			if (cmd_ver >= 4)
+				continue;
+			if ((j == 0 &&
+				(fwrt->ppag_chains[i].subbands[j] > ACPI_PPAG_MAX_LB ||
+				 fwrt->ppag_chains[i].subbands[j] < ACPI_PPAG_MIN_LB)) ||
+				(j != 0 &&
+				(fwrt->ppag_chains[i].subbands[j] > ACPI_PPAG_MAX_HB ||
+				fwrt->ppag_chains[i].subbands[j] < ACPI_PPAG_MIN_HB))) {
+					ret = -EINVAL;
+					goto out_free;
+				}
+		}
+	}
+
+	fwrt->ppag_table_valid = true;
+	ret = 0;
+
+out_free:
+	kfree(data);
+	return ret;
+}
+IWL_EXPORT_SYMBOL(iwl_acpi_get_ppag_table);
+
+int iwl_read_ppag_table(struct iwl_fw_runtime *fwrt, union iwl_ppag_table_cmd *cmd,
+			int *cmd_size)
+{
+        u8 cmd_ver;
+        int i, j, num_sub_bands;
+        s8 *gain;
+
+	/* many firmware images for JF lie about this */
+	if (CSR_HW_RFID_TYPE(fwrt->trans->hw_rf_id) ==
+	    CSR_HW_RFID_TYPE(CSR_HW_RF_ID_TYPE_JF))
+		return -EOPNOTSUPP;
+
+        if (!fw_has_capa(&fwrt->fw->ucode_capa, IWL_UCODE_TLV_CAPA_SET_PPAG)) {
+                IWL_DEBUG_RADIO(fwrt,
+                                "PPAG capability not supported by FW, command not sent.\n");
+                return -EINVAL;
+	}
+
+	cmd_ver = iwl_fw_lookup_cmd_ver(fwrt->fw,
+					WIDE_ID(PHY_OPS_GROUP,
+						PER_PLATFORM_ANT_GAIN_CMD),
+					IWL_FW_CMD_VER_UNKNOWN);
+	if (!fwrt->ppag_table_valid || (cmd_ver <= 3 && !fwrt->ppag_flags)) {
+		IWL_DEBUG_RADIO(fwrt, "PPAG not enabled, command not sent.\n");
+		return -EINVAL;
+	}
+
+        /* The 'flags' field is the same in v1 and in v2 so we can just
+         * use v1 to access it.
+         */
+        cmd->v1.flags = cpu_to_le32(fwrt->ppag_flags);
+
+	IWL_DEBUG_RADIO(fwrt, "PPAG cmd ver is %d\n", cmd_ver);
+	if (cmd_ver == 1) {
+                num_sub_bands = IWL_NUM_SUB_BANDS_V1;
+                gain = cmd->v1.gain[0];
+                *cmd_size = sizeof(cmd->v1);
+                if (fwrt->ppag_ver == 1 || fwrt->ppag_ver == 2) {
+			/* in this case FW supports revision 0 */
+                        IWL_DEBUG_RADIO(fwrt,
+					"PPAG table rev is %d, send truncated table\n",
+                                        fwrt->ppag_ver);
+		}
+	} else if (cmd_ver >= 2 && cmd_ver <= 4) {
+                num_sub_bands = IWL_NUM_SUB_BANDS_V2;
+                gain = cmd->v2.gain[0];
+                *cmd_size = sizeof(cmd->v2);
+                if (fwrt->ppag_ver == 0) {
+			/* in this case FW supports revisions 1 or 2 */
+                        IWL_DEBUG_RADIO(fwrt,
+					"PPAG table rev is 0, send padded table\n");
+                }
+        } else {
+                IWL_DEBUG_RADIO(fwrt, "Unsupported PPAG command version\n");
+                return -EINVAL;
+        }
+
+	/* ppag mode */
+	IWL_DEBUG_RADIO(fwrt,
+			"PPAG MODE bits were read from bios: %d\n",
+			cmd->v1.flags & cpu_to_le32(ACPI_PPAG_MASK));
+	if ((cmd_ver == 1 && !fw_has_capa(&fwrt->fw->ucode_capa,
+					  IWL_UCODE_TLV_CAPA_PPAG_CHINA_BIOS_SUPPORT)) ||
+	    (cmd_ver == 2 && fwrt->ppag_ver == 2)) {
+		cmd->v1.flags &= cpu_to_le32(IWL_PPAG_ETSI_MASK);
+		IWL_DEBUG_RADIO(fwrt, "masking ppag China bit\n");
+	} else {
+		IWL_DEBUG_RADIO(fwrt, "isn't masking ppag China bit\n");
+	}
+
+	IWL_DEBUG_RADIO(fwrt,
+			"PPAG MODE bits going to be sent: %d\n",
+			cmd->v1.flags & cpu_to_le32(ACPI_PPAG_MASK));
+
+	for (i = 0; i < IWL_NUM_CHAIN_LIMITS; i++) {
+                for (j = 0; j < num_sub_bands; j++) {
+                        gain[i * num_sub_bands + j] =
+                                fwrt->ppag_chains[i].subbands[j];
+                        IWL_DEBUG_RADIO(fwrt,
+                                        "PPAG table: chain[%d] band[%d]: gain = %d\n",
+                                        i, j, gain[i * num_sub_bands + j]);
+                }
+        }
+
+	return 0;
+}
+IWL_EXPORT_SYMBOL(iwl_read_ppag_table);
+
+bool iwl_acpi_is_ppag_approved(struct iwl_fw_runtime *fwrt)
+{
+
+	if (!dmi_check_system(dmi_ppag_approved_list)) {
+		IWL_DEBUG_RADIO(fwrt,
+			"System vendor '%s' is not in the approved list, disabling PPAG.\n",
+			dmi_get_system_info(DMI_SYS_VENDOR));
+			fwrt->ppag_flags = 0;
+			return false;
+	}
+
+	return true;
+}
+IWL_EXPORT_SYMBOL(iwl_acpi_is_ppag_approved);
+
+void iwl_acpi_get_phy_filters(struct iwl_fw_runtime *fwrt,
+			      struct iwl_phy_specific_cfg *filters)
+{
+	struct iwl_phy_specific_cfg tmp = {};
+	union acpi_object *wifi_pkg, *data;
+	int tbl_rev, i;
+
+	data = iwl_acpi_get_object(fwrt->dev, ACPI_WPFC_METHOD);
+	if (IS_ERR(data))
+		return;
+
+	/* try to read wtas table revision 1 or revision 0*/
+	wifi_pkg = iwl_acpi_get_wifi_pkg(fwrt->dev, data,
+					 ACPI_WPFC_WIFI_DATA_SIZE,
+					 &tbl_rev);
+	if (IS_ERR(wifi_pkg))
+		goto out_free;
+
+	if (tbl_rev != 0)
+		goto out_free;
+
+	BUILD_BUG_ON(ARRAY_SIZE(filters->filter_cfg_chains) != ACPI_WPFC_WIFI_DATA_SIZE);
+
+	for (i = 0; i < ARRAY_SIZE(filters->filter_cfg_chains); i++) {
+		if (wifi_pkg->package.elements[i].type != ACPI_TYPE_INTEGER)
+			return;
+		tmp.filter_cfg_chains[i] =
+			cpu_to_le32(wifi_pkg->package.elements[i].integer.value);
+	}
+
+	IWL_DEBUG_RADIO(fwrt, "Loaded WPFC filter config from ACPI\n");
+	*filters = tmp;
+out_free:
+	kfree(data);
+}
+IWL_EXPORT_SYMBOL(iwl_acpi_get_phy_filters);

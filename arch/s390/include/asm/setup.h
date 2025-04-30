@@ -11,8 +11,8 @@
 #include <linux/build_bug.h>
 
 #define PARMAREA		0x10400
-#define HEAD_END		0x11000
 
+#define COMMAND_LINE_SIZE CONFIG_COMMAND_LINE_SIZE
 /*
  * Machine features detected in early.c
  */
@@ -34,6 +34,7 @@
 #define MACHINE_FLAG_GS		BIT(16)
 #define MACHINE_FLAG_SCC	BIT(17)
 #define MACHINE_FLAG_PCI_MIO	BIT(18)
+#define MACHINE_FLAG_RDP	BIT(19)
 
 #define LPP_MAGIC		BIT(31)
 #define LPP_PID_MASK		_AC(0xffffffff, UL)
@@ -42,6 +43,8 @@
 
 #define STARTUP_NORMAL_OFFSET	0x10000
 #define STARTUP_KDUMP_OFFSET	0x10010
+
+#define LEGACY_COMMAND_LINE_SIZE	896
 
 #ifndef __ASSEMBLY__
 
@@ -55,8 +58,9 @@ struct parmarea {
 	unsigned long oldmem_base;			/* 0x10418 */
 	unsigned long oldmem_size;			/* 0x10420 */
 	unsigned long kernel_version;			/* 0x10428 */
-	char pad1[0x10480 - 0x10430];			/* 0x10430 - 0x10480 */
-	char command_line[ARCH_COMMAND_LINE_SIZE];	/* 0x10480 */
+	unsigned long max_command_line_size;		/* 0x10430 */
+	char pad1[0x10480-0x10438];			/* 0x10438 - 0x10480 */
+	char command_line[COMMAND_LINE_SIZE];		/* 0x10480 */
 };
 
 extern struct parmarea parmarea;
@@ -68,8 +72,8 @@ extern unsigned int zlib_dfltcc_support;
 #define ZLIB_DFLTCC_INFLATE_ONLY	3
 #define ZLIB_DFLTCC_FULL_DEBUG		4
 
-extern int noexec_disabled;
 extern unsigned long ident_map_size;
+extern unsigned long max_mappable;
 
 /* The Write Back bit position in the physaddr is given by the SLPC PCI */
 extern unsigned long mio_wb_bit_mask;
@@ -92,6 +96,7 @@ extern unsigned long mio_wb_bit_mask;
 #define MACHINE_HAS_GS		(S390_lowcore.machine_flags & MACHINE_FLAG_GS)
 #define MACHINE_HAS_SCC		(S390_lowcore.machine_flags & MACHINE_FLAG_SCC)
 #define MACHINE_HAS_PCI_MIO	(S390_lowcore.machine_flags & MACHINE_FLAG_PCI_MIO)
+#define MACHINE_HAS_RDP		(S390_lowcore.machine_flags & MACHINE_FLAG_RDP)
 
 /*
  * Console mode. Override with conmode=
@@ -111,14 +116,6 @@ extern unsigned int console_irq;
 #define SET_CONSOLE_3270	do { console_mode = 3; } while (0)
 #define SET_CONSOLE_VT220	do { console_mode = 4; } while (0)
 #define SET_CONSOLE_HVC		do { console_mode = 5; } while (0)
-
-#ifdef CONFIG_PFAULT
-extern int pfault_init(void);
-extern void pfault_fini(void);
-#else /* CONFIG_PFAULT */
-#define pfault_init()		({-1;})
-#define pfault_fini()		do { } while (0)
-#endif /* CONFIG_PFAULT */
 
 #ifdef CONFIG_VMCP
 void vmcp_cma_reserve(void);
@@ -141,13 +138,13 @@ static inline unsigned long kaslr_offset(void)
 	return __kaslr_offset;
 }
 
-extern int is_full_image;
-
-struct initrd_data {
-	unsigned long start;
-	unsigned long size;
-};
-extern struct initrd_data initrd_data;
+extern int __kaslr_enabled;
+static inline int kaslr_enabled(void)
+{
+	if (IS_ENABLED(CONFIG_RANDOMIZE_BASE))
+		return __kaslr_enabled;
+	return 0;
+}
 
 struct oldmem_data {
 	unsigned long start;
@@ -155,7 +152,7 @@ struct oldmem_data {
 };
 extern struct oldmem_data oldmem_data;
 
-static inline u32 gen_lpswe(unsigned long addr)
+static __always_inline u32 gen_lpswe(unsigned long addr)
 {
 	BUILD_BUG_ON(addr > 0xfff);
 	return 0xb2b20000 | addr;

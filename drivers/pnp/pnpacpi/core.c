@@ -254,6 +254,9 @@ static int __init pnpacpi_add_device(struct acpi_device *device)
 	else
 		strncpy(dev->name, acpi_device_bid(device), sizeof(dev->name));
 
+	/* Handle possible string truncation */
+	dev->name[sizeof(dev->name) - 1] = '\0';
+
 	if (dev->active)
 		pnpacpi_parse_allocated_resource(dev);
 
@@ -287,9 +290,9 @@ static acpi_status __init pnpacpi_add_device_handler(acpi_handle handle,
 						     u32 lvl, void *context,
 						     void **rv)
 {
-	struct acpi_device *device;
+	struct acpi_device *device = acpi_fetch_acpi_dev(handle);
 
-	if (acpi_bus_get_device(handle, &device))
+	if (!device)
 		return AE_CTRL_DEPTH;
 	if (acpi_is_pnp_device(device))
 		pnpacpi_add_device(device);

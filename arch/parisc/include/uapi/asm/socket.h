@@ -123,6 +123,15 @@
 
 #define SO_BUF_LOCK		0x4046
 
+#define SO_RESERVE_MEM		0x4047
+
+#define SO_TXREHASH		0x4048
+
+#define SO_RCVMARK		0x4049
+
+#define SO_PASSPIDFD		0x404A
+#define SO_PEERPIDFD		0x404B
+
 #if !defined(__KERNEL__)
 
 #if __BITS_PER_LONG == 64

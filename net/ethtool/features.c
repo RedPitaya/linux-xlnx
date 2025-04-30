@@ -35,7 +35,7 @@ static void ethnl_features_to_bitmap32(u32 *dest, netdev_features_t src)
 
 static int features_prepare_data(const struct ethnl_req_info *req_base,
 				 struct ethnl_reply_data *reply_base,
-				 struct genl_info *info)
+				 const struct genl_info *info)
 {
 	struct features_reply_data *data = FEATURES_REPDATA(reply_base);
 	struct net_device *dev = reply_base->dev;
@@ -136,7 +136,6 @@ static void ethnl_features_to_bitmap(unsigned long *dest, netdev_features_t val)
 	const unsigned int words = BITS_TO_LONGS(NETDEV_FEATURE_COUNT);
 	unsigned int i;
 
-	bitmap_zero(dest, NETDEV_FEATURE_COUNT);
 	for (i = 0; i < words; i++)
 		dest[i] = (unsigned long)(val >> (i * BITS_PER_LONG));
 }
@@ -284,6 +283,6 @@ int ethnl_set_features(struct sk_buff *skb, struct genl_info *info)
 
 out_rtnl:
 	rtnl_unlock();
-	dev_put(dev);
+	ethnl_parse_header_dev_put(&req_info);
 	return ret;
 }

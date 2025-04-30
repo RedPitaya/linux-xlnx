@@ -12,9 +12,8 @@
 #include <asm/vmlinux.lds.h>
 #include <asm/cache.h>
 #include <asm/thread_info.h>
-#include <asm/memory.h>
-#include <asm/mpu.h>
 #include <asm/page.h>
+#include <asm/mpu.h>
 
 OUTPUT_ARCH(arm)
 ENTRY(stext)
@@ -166,7 +165,9 @@ SECTIONS
  * binutils is too old (for other reasons as well)
  */
 ASSERT((__proc_info_end - __proc_info_begin), "missing CPU support")
+#ifndef CONFIG_COMPILE_TEST
 ASSERT((__arch_info_end - __arch_info_begin), "no machine record defined")
+#endif
 
 #ifdef CONFIG_XIP_DEFLATED_DATA
 /*

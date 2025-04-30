@@ -299,6 +299,10 @@ struct mhi_controller_config {
  * @iova_start: IOMMU starting address for data (required)
  * @iova_stop: IOMMU stop address for data (required)
  * @fw_image: Firmware image name for normal booting (optional)
+ * @fw_data: Firmware image data content for normal booting, used only
+ *           if fw_image is NULL and fbc_download is true (optional)
+ * @fw_sz: Firmware image data size for normal booting, used only if fw_image
+ *         is NULL and fbc_download is true (optional)
  * @edl_image: Firmware image name for emergency download mode (optional)
  * @rddm_size: RAM dump size that host should allocate for debugging purpose
  * @sbl_size: SBL image size downloaded through BHIe (optional)
@@ -384,6 +388,8 @@ struct mhi_controller {
 	dma_addr_t iova_start;
 	dma_addr_t iova_stop;
 	const char *fw_image;
+	const u8 *fw_data;
+	size_t fw_sz;
 	const char *edl_image;
 	size_t rddm_size;
 	size_t sbl_size;
@@ -664,6 +670,19 @@ int mhi_pm_suspend(struct mhi_controller *mhi_cntrl);
 int mhi_pm_resume(struct mhi_controller *mhi_cntrl);
 
 /**
+ * mhi_pm_resume_force - Force resume MHI from suspended state
+ * @mhi_cntrl: MHI controller
+ *
+ * Resume the device irrespective of its MHI state. As per the MHI spec, devices
+ * has to be in M3 state during resume. But some devices seem to be in a
+ * different MHI state other than M3 but they continue working fine if allowed.
+ * This API is intented to be used for such devices.
+ *
+ * Return: 0 if the resume succeeds, a negative error code otherwise
+ */
+int mhi_pm_resume_force(struct mhi_controller *mhi_cntrl);
+
+/**
  * mhi_download_rddm_image - Download ramdump image from device for
  *                           debugging purpose.
  * @mhi_cntrl: MHI controller
@@ -717,14 +736,25 @@ void mhi_device_put(struct mhi_device *mhi_dev);
 
 /**
  * mhi_prepare_for_transfer - Setup UL and DL channels for data transfer.
- *                            Allocate and initialize the channel context and
- *                            also issue the START channel command to both
- *                            channels. Channels can be started only if both
- *                            host and device execution environments match and
- *                            channels are in a DISABLED state.
  * @mhi_dev: Device associated with the channels
+ *
+ * Allocate and initialize the channel context and also issue the START channel
+ * command to both channels. Channels can be started only if both host and
+ * device execution environments match and channels are in a DISABLED state.
  */
 int mhi_prepare_for_transfer(struct mhi_device *mhi_dev);
+
+/**
+ * mhi_prepare_for_transfer_autoqueue - Setup UL and DL channels with auto queue
+ *                                      buffers for DL traffic
+ * @mhi_dev: Device associated with the channels
+ *
+ * Allocate and initialize the channel context and also issue the START channel
+ * command to both channels. Channels can be started only if both host and
+ * device execution environments match and channels are in a DISABLED state.
+ * The MHI core will automatically allocate and queue buffers for the DL traffic.
+ */
+int mhi_prepare_for_transfer_autoqueue(struct mhi_device *mhi_dev);
 
 /**
  * mhi_unprepare_from_transfer - Reset UL and DL channels for data transfer.
@@ -740,13 +770,6 @@ int mhi_prepare_for_transfer(struct mhi_device *mhi_dev);
  * @mhi_dev: Device associated with the channels
  */
 void mhi_unprepare_from_transfer(struct mhi_device *mhi_dev);
-
-/**
- * mhi_poll - Poll for any available data in DL direction
- * @mhi_dev: Device associated with the channels
- * @budget: # of events to process
- */
-int mhi_poll(struct mhi_device *mhi_dev, u32 budget);
 
 /**
  * mhi_queue_dma - Send or receive DMA mapped buffers from client device

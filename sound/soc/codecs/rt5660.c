@@ -11,11 +11,9 @@
 #include <linux/init.h>
 #include <linux/delay.h>
 #include <linux/pm.h>
-#include <linux/gpio.h>
 #include <linux/i2c.h>
 #include <linux/regmap.h>
 #include <linux/of.h>
-#include <linux/of_gpio.h>
 #include <linux/platform_device.h>
 #include <linux/spi/spi.h>
 #include <linux/acpi.h>
@@ -1046,7 +1044,7 @@ static int rt5660_set_dai_pll(struct snd_soc_dai *dai, int pll_id, int source,
 
 	ret = rl6231_pll_calc(freq_in, freq_out, &pll_code);
 	if (ret < 0) {
-		dev_err(component->dev, "Unsupport input clock %d\n", freq_in);
+		dev_err(component->dev, "Unsupported input clock %d\n", freq_in);
 		return ret;
 	}
 
@@ -1208,7 +1206,6 @@ static const struct snd_soc_component_driver soc_component_dev_rt5660 = {
 	.num_dapm_routes	= ARRAY_SIZE(rt5660_dapm_routes),
 	.use_pmdown_time	= 1,
 	.endianness		= 1,
-	.non_legacy_dai_naming	= 1,
 };
 
 static const struct regmap_config rt5660_regmap = {
@@ -1222,7 +1219,7 @@ static const struct regmap_config rt5660_regmap = {
 	.volatile_reg = rt5660_volatile_register,
 	.readable_reg = rt5660_readable_register,
 
-	.cache_type = REGCACHE_RBTREE,
+	.cache_type = REGCACHE_MAPLE,
 	.reg_defaults = rt5660_reg,
 	.num_reg_defaults = ARRAY_SIZE(rt5660_reg),
 	.ranges = rt5660_ranges,
@@ -1266,8 +1263,7 @@ static int rt5660_parse_dt(struct rt5660_priv *rt5660, struct device *dev)
 	return 0;
 }
 
-static int rt5660_i2c_probe(struct i2c_client *i2c,
-		    const struct i2c_device_id *id)
+static int rt5660_i2c_probe(struct i2c_client *i2c)
 {
 	struct rt5660_platform_data *pdata = dev_get_platdata(&i2c->dev);
 	struct rt5660_priv *rt5660;

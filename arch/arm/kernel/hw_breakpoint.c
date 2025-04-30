@@ -626,7 +626,7 @@ int hw_breakpoint_arch_parse(struct perf_event *bp,
 	hw->address &= ~alignment_mask;
 	hw->ctrl.len <<= offset;
 
-	if (is_default_overflow_handler(bp)) {
+	if (uses_default_overflow_handler(bp)) {
 		/*
 		 * Mismatch breakpoints are required for single-stepping
 		 * breakpoints.
@@ -798,7 +798,7 @@ static void watchpoint_handler(unsigned long addr, unsigned int fsr,
 		 * Otherwise, insert a temporary mismatch breakpoint so that
 		 * we can single-step over the watchpoint trigger.
 		 */
-		if (!is_default_overflow_handler(wp))
+		if (!uses_default_overflow_handler(wp))
 			continue;
 step:
 		enable_single_step(wp, instruction_pointer(regs));
@@ -811,7 +811,7 @@ step:
 		info->trigger = addr;
 		pr_debug("watchpoint fired: address = 0x%x\n", info->trigger);
 		perf_bp_event(wp, regs);
-		if (is_default_overflow_handler(wp))
+		if (uses_default_overflow_handler(wp))
 			enable_single_step(wp, instruction_pointer(regs));
 	}
 
@@ -886,7 +886,7 @@ static void breakpoint_handler(unsigned long unknown, struct pt_regs *regs)
 			info->trigger = addr;
 			pr_debug("breakpoint fired: address = 0x%x\n", addr);
 			perf_bp_event(bp, regs);
-			if (is_default_overflow_handler(bp))
+			if (uses_default_overflow_handler(bp))
 				enable_single_step(bp, addr);
 			goto unlock;
 		}
@@ -941,6 +941,23 @@ static int hw_breakpoint_pending(unsigned long addr, unsigned int fsr,
 	return ret;
 }
 
+#ifdef CONFIG_ARM_ERRATA_764319
+static int oslsr_fault;
+
+static int debug_oslsr_trap(struct pt_regs *regs, unsigned int instr)
+{
+	oslsr_fault = 1;
+	instruction_pointer(regs) += 4;
+	return 0;
+}
+
+static struct undef_hook debug_oslsr_hook = {
+	.instr_mask  = 0xffffffff,
+	.instr_val = 0xee115e91,
+	.fn = debug_oslsr_trap,
+};
+#endif
+
 /*
  * One-time initialisation.
  */
@@ -974,7 +991,16 @@ static bool core_has_os_save_restore(void)
 	case ARM_DEBUG_ARCH_V7_1:
 		return true;
 	case ARM_DEBUG_ARCH_V7_ECP14:
+#ifdef CONFIG_ARM_ERRATA_764319
+		oslsr_fault = 0;
+		register_undef_hook(&debug_oslsr_hook);
 		ARM_DBG_READ(c1, c1, 4, oslsr);
+		unregister_undef_hook(&debug_oslsr_hook);
+		if (oslsr_fault)
+			return false;
+#else
+		ARM_DBG_READ(c1, c1, 4, oslsr);
+#endif
 		if (oslsr & ARM_OSLSR_OSLM0)
 			return true;
 		fallthrough;

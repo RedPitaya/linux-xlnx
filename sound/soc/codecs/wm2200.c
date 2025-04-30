@@ -145,13 +145,13 @@ static const struct regmap_range_cfg wm2200_ranges[] = {
 	  .window_start = WM2200_DSP2_ZM_0, .window_len = 1024, },
 };
 
-static const struct wm_adsp_region wm2200_dsp1_regions[] = {
+static const struct cs_dsp_region wm2200_dsp1_regions[] = {
 	{ .type = WMFW_ADSP1_PM, .base = WM2200_DSP1_PM_BASE },
 	{ .type = WMFW_ADSP1_DM, .base = WM2200_DSP1_DM_BASE },
 	{ .type = WMFW_ADSP1_ZM, .base = WM2200_DSP1_ZM_BASE },
 };
 
-static const struct wm_adsp_region wm2200_dsp2_regions[] = {
+static const struct cs_dsp_region wm2200_dsp2_regions[] = {
 	{ .type = WMFW_ADSP1_PM, .base = WM2200_DSP2_PM_BASE },
 	{ .type = WMFW_ADSP1_DM, .base = WM2200_DSP2_DM_BASE },
 	{ .type = WMFW_ADSP1_ZM, .base = WM2200_DSP2_ZM_BASE },
@@ -1770,11 +1770,6 @@ static int wm2200_hw_params(struct snd_pcm_substream *substream,
 	return 0;
 }
 
-static const struct snd_soc_dai_ops wm2200_dai_ops = {
-	.set_fmt = wm2200_set_fmt,
-	.hw_params = wm2200_hw_params,
-};
-
 static int wm2200_set_sysclk(struct snd_soc_component *component, int clk_id,
 			     int source, unsigned int freq, int dir)
 {
@@ -2068,6 +2063,12 @@ static int wm2200_dai_probe(struct snd_soc_dai *dai)
 	return 0;
 }
 
+static const struct snd_soc_dai_ops wm2200_dai_ops = {
+	.probe = wm2200_dai_probe,
+	.set_fmt = wm2200_set_fmt,
+	.hw_params = wm2200_hw_params,
+};
+
 #define WM2200_RATES SNDRV_PCM_RATE_8000_48000
 
 #define WM2200_FORMATS (SNDRV_PCM_FMTBIT_S16_LE | SNDRV_PCM_FMTBIT_S20_3LE |\
@@ -2075,7 +2076,6 @@ static int wm2200_dai_probe(struct snd_soc_dai *dai)
 
 static struct snd_soc_dai_driver wm2200_dai = {
 	.name = "wm2200",
-	.probe = wm2200_dai_probe,
 	.playback = {
 		.stream_name = "Playback",
 		.channels_min = 2,
@@ -2104,7 +2104,6 @@ static const struct snd_soc_component_driver soc_component_wm2200 = {
 	.dapm_routes		= wm2200_dapm_routes,
 	.num_dapm_routes	= ARRAY_SIZE(wm2200_dapm_routes),
 	.endianness		= 1,
-	.non_legacy_dai_naming	= 1,
 };
 
 static irqreturn_t wm2200_irq(int irq, void *data)
@@ -2152,7 +2151,7 @@ static const struct regmap_config wm2200_regmap = {
 	.num_reg_defaults = ARRAY_SIZE(wm2200_reg_defaults),
 	.volatile_reg = wm2200_volatile_register,
 	.readable_reg = wm2200_readable_register,
-	.cache_type = REGCACHE_RBTREE,
+	.cache_type = REGCACHE_MAPLE,
 	.ranges = wm2200_ranges,
 	.num_ranges = ARRAY_SIZE(wm2200_ranges),
 };
@@ -2176,8 +2175,7 @@ static const unsigned int wm2200_mic_ctrl_reg[] = {
 	WM2200_IN3L_CONTROL,
 };
 
-static int wm2200_i2c_probe(struct i2c_client *i2c,
-			    const struct i2c_device_id *id)
+static int wm2200_i2c_probe(struct i2c_client *i2c)
 {
 	struct wm2200_pdata *pdata = dev_get_platdata(&i2c->dev);
 	struct wm2200_priv *wm2200;
@@ -2202,23 +2200,23 @@ static int wm2200_i2c_probe(struct i2c_client *i2c,
 	}
 
 	for (i = 0; i < 2; i++) {
-		wm2200->dsp[i].type = WMFW_ADSP1;
+		wm2200->dsp[i].cs_dsp.type = WMFW_ADSP1;
 		wm2200->dsp[i].part = "wm2200";
-		wm2200->dsp[i].num = i + 1;
-		wm2200->dsp[i].dev = &i2c->dev;
-		wm2200->dsp[i].regmap = wm2200->regmap;
-		wm2200->dsp[i].sysclk_reg = WM2200_CLOCKING_3;
-		wm2200->dsp[i].sysclk_mask = WM2200_SYSCLK_FREQ_MASK;
-		wm2200->dsp[i].sysclk_shift =  WM2200_SYSCLK_FREQ_SHIFT;
+		wm2200->dsp[i].cs_dsp.num = i + 1;
+		wm2200->dsp[i].cs_dsp.dev = &i2c->dev;
+		wm2200->dsp[i].cs_dsp.regmap = wm2200->regmap;
+		wm2200->dsp[i].cs_dsp.sysclk_reg = WM2200_CLOCKING_3;
+		wm2200->dsp[i].cs_dsp.sysclk_mask = WM2200_SYSCLK_FREQ_MASK;
+		wm2200->dsp[i].cs_dsp.sysclk_shift =  WM2200_SYSCLK_FREQ_SHIFT;
 	}
 
-	wm2200->dsp[0].base = WM2200_DSP1_CONTROL_1;
-	wm2200->dsp[0].mem = wm2200_dsp1_regions;
-	wm2200->dsp[0].num_mems = ARRAY_SIZE(wm2200_dsp1_regions);
+	wm2200->dsp[0].cs_dsp.base = WM2200_DSP1_CONTROL_1;
+	wm2200->dsp[0].cs_dsp.mem = wm2200_dsp1_regions;
+	wm2200->dsp[0].cs_dsp.num_mems = ARRAY_SIZE(wm2200_dsp1_regions);
 
-	wm2200->dsp[1].base = WM2200_DSP2_CONTROL_1;
-	wm2200->dsp[1].mem = wm2200_dsp2_regions;
-	wm2200->dsp[1].num_mems = ARRAY_SIZE(wm2200_dsp2_regions);
+	wm2200->dsp[1].cs_dsp.base = WM2200_DSP2_CONTROL_1;
+	wm2200->dsp[1].cs_dsp.mem = wm2200_dsp2_regions;
+	wm2200->dsp[1].cs_dsp.num_mems = ARRAY_SIZE(wm2200_dsp2_regions);
 
 	for (i = 0; i < ARRAY_SIZE(wm2200->dsp); i++)
 		wm_adsp1_init(&wm2200->dsp[i]);
@@ -2416,7 +2414,7 @@ err_enable:
 	return ret;
 }
 
-static int wm2200_i2c_remove(struct i2c_client *i2c)
+static void wm2200_i2c_remove(struct i2c_client *i2c)
 {
 	struct wm2200_priv *wm2200 = i2c_get_clientdata(i2c);
 
@@ -2429,8 +2427,6 @@ static int wm2200_i2c_remove(struct i2c_client *i2c)
 		gpio_set_value_cansleep(wm2200->pdata.ldo_ena, 0);
 	regulator_bulk_disable(ARRAY_SIZE(wm2200->core_supplies),
 			       wm2200->core_supplies);
-
-	return 0;
 }
 
 #ifdef CONFIG_PM

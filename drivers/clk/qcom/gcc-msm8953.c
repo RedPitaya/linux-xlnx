@@ -7,7 +7,6 @@
 #include <linux/module.h>
 #include <linux/platform_device.h>
 #include <linux/of.h>
-#include <linux/of_device.h>
 #include <linux/clk-provider.h>
 #include <linux/regmap.h>
 #include <linux/reset-controller.h>
@@ -4230,7 +4229,6 @@ static struct platform_driver gcc_msm8953_driver = {
 	.driver = {
 		.name = "gcc-msm8953",
 		.of_match_table = gcc_msm8953_match_table,
-		.owner = THIS_MODULE,
 	},
 };
 

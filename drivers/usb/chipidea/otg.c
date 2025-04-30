@@ -165,11 +165,12 @@ static int hw_wait_vbus_lower_bsv(struct ci_hdrc *ci)
 	return 0;
 }
 
-static void ci_handle_id_switch(struct ci_hdrc *ci)
+void ci_handle_id_switch(struct ci_hdrc *ci)
 {
-	enum ci_role role = ci_otg_role(ci);
-	int ret;
+	enum ci_role role;
 
+	mutex_lock(&ci->mutex);
+	role = ci_otg_role(ci);
 	if (role != ci->role) {
 		dev_dbg(ci->dev, "switching from %s to %s\n",
 			ci_role(ci)->name, ci->roles[role]->name);
@@ -194,14 +195,12 @@ static void ci_handle_id_switch(struct ci_hdrc *ci)
 			 */
 			hw_wait_vbus_lower_bsv(ci);
 
-		ret = ci_role_start(ci, role);
-		if (ret < 0)
-			dev_dbg(ci->dev, "switching err %d\n", ret);
-
+		ci_role_start(ci, role);
 		/* vbus change may have already occurred */
 		if (role == CI_ROLE_GADGET)
 			ci_handle_vbus_change(ci);
 	}
+	mutex_unlock(&ci->mutex);
 }
 /**
  * ci_otg_work - perform otg (vbus/id) event handle
@@ -259,10 +258,9 @@ int ci_hdrc_otg_init(struct ci_hdrc *ci)
  */
 void ci_hdrc_otg_destroy(struct ci_hdrc *ci)
 {
-	if (ci->wq) {
-		flush_workqueue(ci->wq);
+	if (ci->wq)
 		destroy_workqueue(ci->wq);
-	}
+
 	/* Disable all OTG irq and clear status */
 	hw_write_otgsc(ci, OTGSC_INT_EN_BITS | OTGSC_INT_STATUS_BITS,
 						OTGSC_INT_STATUS_BITS);

@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
-/* Copyright (c) 2015-2018, The Linux Foundation. All rights reserved.
+/*
+ * Copyright (c) 2015-2021, The Linux Foundation. All rights reserved.
  */
 
 #ifndef _DPU_HW_LM_H
@@ -7,7 +8,6 @@
 
 #include "dpu_hw_mdss.h"
 #include "dpu_hw_util.h"
-#include "dpu_hw_blk.h"
 
 struct dpu_hw_mixer;
 
@@ -53,6 +53,16 @@ struct dpu_hw_lm_ops {
 	void (*setup_border_color)(struct dpu_hw_mixer *ctx,
 		struct dpu_mdss_color *color,
 		u8 border_en);
+
+	/**
+	 * setup_misr: Enable/disable MISR
+	 */
+	void (*setup_misr)(struct dpu_hw_mixer *ctx, bool enable, u32 frame_count);
+
+	/**
+	 * collect_misr: Read MISR signature
+	 */
+	int (*collect_misr)(struct dpu_hw_mixer *ctx, u32 *misr_value);
 };
 
 struct dpu_hw_mixer {
@@ -83,15 +93,13 @@ static inline struct dpu_hw_mixer *to_dpu_hw_mixer(struct dpu_hw_blk *hw)
 }
 
 /**
- * dpu_hw_lm_init(): Initializes the mixer hw driver object.
+ * dpu_hw_lm_init() - Initializes the mixer hw driver object.
  * should be called once before accessing every mixer.
- * @idx:  mixer index for which driver object is required
+ * @cfg:  mixer catalog entry for which driver object is required
  * @addr: mapped register io address of MDP
- * @m :   pointer to mdss catalog data
  */
-struct dpu_hw_mixer *dpu_hw_lm_init(enum dpu_lm idx,
-		void __iomem *addr,
-		const struct dpu_mdss_cfg *m);
+struct dpu_hw_mixer *dpu_hw_lm_init(const struct dpu_lm_cfg *cfg,
+		void __iomem *addr);
 
 /**
  * dpu_hw_lm_destroy(): Destroys layer mixer driver context

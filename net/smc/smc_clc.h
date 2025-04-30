@@ -14,8 +14,10 @@
 #define _SMC_CLC_H
 
 #include <rdma/ib_verbs.h>
+#include <linux/smc.h>
 
 #include "smc.h"
+#include "smc_netlink.h"
 
 #define SMC_CLC_PROPOSAL	0x01
 #define SMC_CLC_ACCEPT		0x02
@@ -42,6 +44,10 @@
 #define SMC_CLC_DECL_NOV2DEXT	0x03030005  /* peer sent no clc SMC-Dv2 ext.  */
 #define SMC_CLC_DECL_NOSEID	0x03030006  /* peer sent no SEID	      */
 #define SMC_CLC_DECL_NOSMCD2DEV	0x03030007  /* no SMC-Dv2 device found	      */
+#define SMC_CLC_DECL_NOUEID	0x03030008  /* peer sent no UEID	      */
+#define SMC_CLC_DECL_RELEASEERR	0x03030009  /* release version negotiate failed */
+#define SMC_CLC_DECL_MAXCONNERR	0x0303000a  /* max connections negotiate failed */
+#define SMC_CLC_DECL_MAXLINKERR	0x0303000b  /* max links negotiate failed */
 #define SMC_CLC_DECL_MODEUNSUPP	0x03040000  /* smc modes do not match (R or D)*/
 #define SMC_CLC_DECL_RMBE_EC	0x03050000  /* peer has eyecatcher in RMBE    */
 #define SMC_CLC_DECL_OPTUNSUPP	0x03060000  /* fastopen sockopt not supported */
@@ -52,12 +58,14 @@
 #define SMC_CLC_DECL_NOSRVLINK	0x030b0000  /* SMC-R link from srv not found  */
 #define SMC_CLC_DECL_VERSMISMAT	0x030c0000  /* SMC version mismatch	      */
 #define SMC_CLC_DECL_MAX_DMB	0x030d0000  /* SMC-D DMB limit exceeded       */
+#define SMC_CLC_DECL_NOROUTE	0x030e0000  /* SMC-Rv2 conn. no route to peer */
+#define SMC_CLC_DECL_NOINDIRECT	0x030f0000  /* SMC-Rv2 conn. indirect mismatch*/
 #define SMC_CLC_DECL_SYNCERR	0x04000000  /* synchronization error          */
 #define SMC_CLC_DECL_PEERDECL	0x05000000  /* peer declined during handshake */
 #define SMC_CLC_DECL_INTERR	0x09990000  /* internal error		      */
 #define SMC_CLC_DECL_ERR_RTOK	0x09990001  /*	 rtoken handling failed       */
 #define SMC_CLC_DECL_ERR_RDYLNK	0x09990002  /*	 ib ready link failed	      */
-#define SMC_CLC_DECL_ERR_REGRMB	0x09990003  /*	 reg rmb failed		      */
+#define SMC_CLC_DECL_ERR_REGBUF	0x09990003  /*	 reg rdma bufs failed	      */
 
 #define SMC_FIRST_CONTACT_MASK	0b10	/* first contact bit within typev2 */
 
@@ -128,7 +136,9 @@ struct smc_clc_smcd_gid_chid {
 struct smc_clc_v2_extension {
 	struct smc_clnt_opts_area_hdr hdr;
 	u8 roce[16];		/* RoCEv2 GID */
-	u8 reserved[16];
+	u8 max_conns;
+	u8 max_links;
+	u8 reserved[14];
 	u8 user_eids[][SMC_MAX_EID_LEN];
 };
 
@@ -142,7 +152,9 @@ struct smc_clc_msg_proposal_prefix {	/* prefix part of clc proposal message*/
 struct smc_clc_msg_smcd {	/* SMC-D GID information */
 	struct smc_clc_smcd_gid_chid ism; /* ISM native GID+CHID of requestor */
 	__be16 v2_ext_offset;	/* SMC Version 2 Extension Offset */
-	u8 reserved[28];
+	u8 vendor_oui[3];	/* vendor organizationally unique identifier */
+	u8 vendor_exp_options[5];
+	u8 reserved[20];
 };
 
 struct smc_clc_smcd_v2_extension {
@@ -158,6 +170,7 @@ struct smc_clc_msg_proposal {	/* clc proposal message sent by Linux */
 } __aligned(4);
 
 #define SMC_CLC_MAX_V6_PREFIX		8
+#define SMC_CLC_MAX_UEID		8
 
 struct smc_clc_msg_proposal_area {
 	struct smc_clc_msg_proposal		pclc_base;
@@ -165,6 +178,7 @@ struct smc_clc_msg_proposal_area {
 	struct smc_clc_msg_proposal_prefix	pclc_prfx;
 	struct smc_clc_ipv6_prefix	pclc_prfx_ipv6[SMC_CLC_MAX_V6_PREFIX];
 	struct smc_clc_v2_extension		pclc_v2_ext;
+	u8			user_eids[SMC_CLC_MAX_UEID][SMC_MAX_EID_LEN];
 	struct smc_clc_smcd_v2_extension	pclc_smcd_v2_ext;
 	struct smc_clc_smcd_gid_chid		pclc_gidchids[SMC_MAX_ISM_DEVS];
 	struct smc_clc_msg_trail		pclc_trl;
@@ -209,16 +223,37 @@ struct smcd_clc_msg_accept_confirm_common {	/* SMCD accept/confirm */
 #define SMC_CLC_OS_AIX		3
 
 struct smc_clc_first_contact_ext {
-	u8 reserved1;
 #if defined(__BIG_ENDIAN_BITFIELD)
+	u8 v2_direct : 1,
+	   reserved  : 7;
 	u8 os_type : 4,
 	   release : 4;
 #elif defined(__LITTLE_ENDIAN_BITFIELD)
+	u8 reserved  : 7,
+	   v2_direct : 1;
 	u8 release : 4,
 	   os_type : 4;
 #endif
 	u8 reserved2[2];
 	u8 hostname[SMC_MAX_HOSTNAME_LEN];
+};
+
+struct smc_clc_first_contact_ext_v2x {
+	struct smc_clc_first_contact_ext fce_v2_base;
+	u8 max_conns; /* for SMC-R only */
+	u8 max_links; /* for SMC-R only */
+	u8 reserved3[2];
+	__be32 vendor_exp_options;
+	u8 reserved4[8];
+} __packed;		/* format defined in
+			 * IBM Shared Memory Communications Version 2 (Third Edition)
+			 * (https://www.ibm.com/support/pages/node/7009315)
+			 */
+
+struct smc_clc_fce_gid_ext {
+	u8 gid_cnt;
+	u8 reserved2[3];
+	u8 gid[][SMC_GID_SIZE];
 };
 
 struct smc_clc_msg_accept_confirm {	/* clc accept / confirm message */
@@ -235,13 +270,17 @@ struct smc_clc_msg_accept_confirm {	/* clc accept / confirm message */
 struct smc_clc_msg_accept_confirm_v2 {	/* clc accept / confirm message */
 	struct smc_clc_msg_hdr hdr;
 	union {
-		struct smcr_clc_msg_accept_confirm r0; /* SMC-R */
+		struct { /* SMC-R */
+			struct smcr_clc_msg_accept_confirm r0;
+			u8 eid[SMC_MAX_EID_LEN];
+			u8 reserved6[8];
+		} r1;
 		struct { /* SMC-D */
 			struct smcd_clc_msg_accept_confirm_common d0;
 			__be16 chid;
 			u8 eid[SMC_MAX_EID_LEN];
 			u8 reserved5[8];
-		};
+		} d1;
 	};
 };
 
@@ -257,6 +296,24 @@ struct smc_clc_msg_decline {	/* clc decline message */
 	   os_type  : 4;
 #endif
 	u8 reserved2[3];
+	struct smc_clc_msg_trail trl; /* eye catcher "SMCD" or "SMCR" EBCDIC */
+} __aligned(4);
+
+#define SMC_DECL_DIAG_COUNT_V2	4 /* no. of additional peer diagnosis codes */
+
+struct smc_clc_msg_decline_v2 {	/* clc decline message */
+	struct smc_clc_msg_hdr hdr;
+	u8 id_for_peer[SMC_SYSTEMID_LEN]; /* sender peer_id */
+	__be32 peer_diagnosis;	/* diagnosis information */
+#if defined(__BIG_ENDIAN_BITFIELD)
+	u8 os_type  : 4,
+	   reserved : 4;
+#elif defined(__LITTLE_ENDIAN_BITFIELD)
+	u8 reserved : 4,
+	   os_type  : 4;
+#endif
+	u8 reserved2[3];
+	__be32 peer_diagnosis_v2[SMC_DECL_DIAG_COUNT_V2];
 	struct smc_clc_msg_trail trl; /* eye catcher "SMCD" or "SMCR" EBCDIC */
 } __aligned(4);
 
@@ -276,6 +333,17 @@ static inline bool smcr_indicated(int smc_type)
 static inline bool smcd_indicated(int smc_type)
 {
 	return smc_type == SMC_TYPE_D || smc_type == SMC_TYPE_B;
+}
+
+static inline u8 smc_indicated_type(int is_smcd, int is_smcr)
+{
+	if (is_smcd && is_smcr)
+		return SMC_TYPE_B;
+	if (is_smcd)
+		return SMC_TYPE_D;
+	if (is_smcr)
+		return SMC_TYPE_R;
+	return SMC_TYPE_N;
 }
 
 /* get SMC-D info from proposal message */
@@ -320,6 +388,27 @@ smc_get_clc_smcd_v2_ext(struct smc_clc_v2_extension *prop_v2ext)
 		 ntohs(prop_v2ext->hdr.smcd_v2_ext_offset));
 }
 
+static inline struct smc_clc_first_contact_ext *
+smc_get_clc_first_contact_ext(struct smc_clc_msg_accept_confirm_v2 *clc_v2,
+			      bool is_smcd)
+{
+	int clc_v2_len;
+
+	if (clc_v2->hdr.version == SMC_V1 ||
+	    !(clc_v2->hdr.typev2 & SMC_FIRST_CONTACT_MASK))
+		return NULL;
+
+	if (is_smcd)
+		clc_v2_len =
+			offsetofend(struct smc_clc_msg_accept_confirm_v2, d1);
+	else
+		clc_v2_len =
+			offsetofend(struct smc_clc_msg_accept_confirm_v2, r1);
+
+	return (struct smc_clc_first_contact_ext *)(((u8 *)clc_v2) +
+						    clc_v2_len);
+}
+
 struct smcd_dev;
 struct smc_init_info;
 
@@ -330,10 +419,28 @@ int smc_clc_wait_msg(struct smc_sock *smc, void *buf, int buflen,
 int smc_clc_send_decline(struct smc_sock *smc, u32 peer_diag_info, u8 version);
 int smc_clc_send_proposal(struct smc_sock *smc, struct smc_init_info *ini);
 int smc_clc_send_confirm(struct smc_sock *smc, bool clnt_first_contact,
-			 u8 version);
+			 u8 version, u8 *eid, struct smc_init_info *ini);
 int smc_clc_send_accept(struct smc_sock *smc, bool srv_first_contact,
-			u8 version);
+			u8 version, u8 *negotiated_eid, struct smc_init_info *ini);
+int smc_clc_srv_v2x_features_validate(struct smc_clc_msg_proposal *pclc,
+				      struct smc_init_info *ini);
+int smc_clc_clnt_v2x_features_validate(struct smc_clc_first_contact_ext *fce,
+				       struct smc_init_info *ini);
+int smc_clc_v2x_features_confirm_check(struct smc_clc_msg_accept_confirm *cclc,
+				       struct smc_init_info *ini);
 void smc_clc_init(void) __init;
+void smc_clc_exit(void);
 void smc_clc_get_hostname(u8 **host);
+bool smc_clc_match_eid(u8 *negotiated_eid,
+		       struct smc_clc_v2_extension *smc_v2_ext,
+		       u8 *peer_eid, u8 *local_eid);
+int smc_clc_ueid_count(void);
+int smc_nl_dump_ueid(struct sk_buff *skb, struct netlink_callback *cb);
+int smc_nl_add_ueid(struct sk_buff *skb, struct genl_info *info);
+int smc_nl_remove_ueid(struct sk_buff *skb, struct genl_info *info);
+int smc_nl_flush_ueid(struct sk_buff *skb, struct genl_info *info);
+int smc_nl_dump_seid(struct sk_buff *skb, struct netlink_callback *cb);
+int smc_nl_enable_seid(struct sk_buff *skb, struct genl_info *info);
+int smc_nl_disable_seid(struct sk_buff *skb, struct genl_info *info);
 
 #endif

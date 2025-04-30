@@ -73,13 +73,13 @@ static struct ltc4261_data *ltc4261_update_device(struct device *dev)
 					"Failed to read ADC value: error %d\n",
 					val);
 				ret = ERR_PTR(val);
-				data->valid = 0;
+				data->valid = false;
 				goto abort;
 			}
 			data->regs[i] = val;
 		}
 		data->last_updated = jiffies;
-		data->valid = 1;
+		data->valid = true;
 	}
 abort:
 	mutex_unlock(&data->update_lock);
@@ -233,7 +233,7 @@ static struct i2c_driver ltc4261_driver = {
 	.driver = {
 		   .name = "ltc4261",
 		   },
-	.probe_new = ltc4261_probe,
+	.probe = ltc4261_probe,
 	.id_table = ltc4261_id,
 };
 

@@ -35,12 +35,12 @@ void nft_flow_rule_set_addr_type(struct nft_flow_rule *flow,
 	struct nft_flow_key *mask = &match->mask;
 	struct nft_flow_key *key = &match->key;
 
-	if (match->dissector.used_keys & BIT(FLOW_DISSECTOR_KEY_CONTROL))
+	if (match->dissector.used_keys & BIT_ULL(FLOW_DISSECTOR_KEY_CONTROL))
 		return;
 
 	key->control.addr_type = addr_type;
 	mask->control.addr_type = 0xffff;
-	match->dissector.used_keys |= BIT(FLOW_DISSECTOR_KEY_CONTROL);
+	match->dissector.used_keys |= BIT_ULL(FLOW_DISSECTOR_KEY_CONTROL);
 	match->dissector.offset[FLOW_DISSECTOR_KEY_CONTROL] =
 		offsetof(struct nft_flow_key, control);
 }
@@ -59,7 +59,7 @@ static void nft_flow_rule_transfer_vlan(struct nft_offload_ctx *ctx,
 		.mask	= match->mask.basic.n_proto,
 	};
 
-	if (match->dissector.used_keys & BIT(FLOW_DISSECTOR_KEY_VLAN) &&
+	if (match->dissector.used_keys & BIT_ULL(FLOW_DISSECTOR_KEY_VLAN) &&
 	    (match->key.vlan.vlan_tpid == htons(ETH_P_8021Q) ||
 	     match->key.vlan.vlan_tpid == htons(ETH_P_8021AD))) {
 		match->key.basic.n_proto = match->key.cvlan.vlan_tpid;
@@ -70,8 +70,9 @@ static void nft_flow_rule_transfer_vlan(struct nft_offload_ctx *ctx,
 		match->mask.vlan.vlan_tpid = ethertype.mask;
 		match->dissector.offset[FLOW_DISSECTOR_KEY_CVLAN] =
 			offsetof(struct nft_flow_key, cvlan);
-		match->dissector.used_keys |= BIT(FLOW_DISSECTOR_KEY_CVLAN);
-	} else if (match->dissector.used_keys & BIT(FLOW_DISSECTOR_KEY_BASIC) &&
+		match->dissector.used_keys |= BIT_ULL(FLOW_DISSECTOR_KEY_CVLAN);
+	} else if (match->dissector.used_keys &
+		   BIT_ULL(FLOW_DISSECTOR_KEY_BASIC) &&
 		   (match->key.basic.n_proto == htons(ETH_P_8021Q) ||
 		    match->key.basic.n_proto == htons(ETH_P_8021AD))) {
 		match->key.basic.n_proto = match->key.vlan.vlan_tpid;
@@ -80,7 +81,7 @@ static void nft_flow_rule_transfer_vlan(struct nft_offload_ctx *ctx,
 		match->mask.vlan.vlan_tpid = ethertype.mask;
 		match->dissector.offset[FLOW_DISSECTOR_KEY_VLAN] =
 			offsetof(struct nft_flow_key, vlan);
-		match->dissector.used_keys |= BIT(FLOW_DISSECTOR_KEY_VLAN);
+		match->dissector.used_keys |= BIT_ULL(FLOW_DISSECTOR_KEY_VLAN);
 	}
 }
 
@@ -94,7 +95,8 @@ struct nft_flow_rule *nft_flow_rule_create(struct net *net,
 
 	expr = nft_expr_first(rule);
 	while (nft_expr_more(rule, expr)) {
-		if (expr->ops->offload_flags & NFT_OFFLOAD_F_ACTION)
+		if (expr->ops->offload_action &&
+		    expr->ops->offload_action(expr))
 			num_actions++;
 
 		expr = nft_expr_next(expr);
@@ -207,13 +209,34 @@ static int nft_setup_cb_call(enum tc_setup_type type, void *type_data,
 	return 0;
 }
 
-int nft_chain_offload_priority(struct nft_base_chain *basechain)
+static int nft_chain_offload_priority(const struct nft_base_chain *basechain)
 {
 	if (basechain->ops.priority <= 0 ||
 	    basechain->ops.priority > USHRT_MAX)
 		return -1;
 
 	return 0;
+}
+
+bool nft_chain_offload_support(const struct nft_base_chain *basechain)
+{
+	struct net_device *dev;
+	struct nft_hook *hook;
+
+	if (nft_chain_offload_priority(basechain) < 0)
+		return false;
+
+	list_for_each_entry(hook, &basechain->hook_list, list) {
+		if (hook->ops.pf != NFPROTO_NETDEV ||
+		    hook->ops.hooknum != NF_NETDEV_INGRESS)
+			return false;
+
+		dev = hook->ops.dev;
+		if (!dev->netdev_ops->ndo_setup_tc && !flow_indr_dev_exists())
+			return false;
+	}
+
+	return true;
 }
 
 static void nft_flow_cls_offload_setup(struct flow_cls_offload *cls_flow,

@@ -6,11 +6,10 @@
  * Author: Tom Joseph <tjoseph@cadence.com>
  */
 #include <linux/kernel.h>
-#include <linux/of_address.h>
+#include <linux/of.h>
 #include <linux/of_pci.h>
 #include <linux/platform_device.h>
 #include <linux/pm_runtime.h>
-#include <linux/of_device.h>
 #include "pcie-cadence.h"
 
 #define CDNS_PLAT_CPU_TO_BUS_ADDR	0x0FFFFFFF
@@ -45,7 +44,6 @@ static int cdns_plat_pcie_probe(struct platform_device *pdev)
 {
 	const struct cdns_plat_pcie_of_data *data;
 	struct cdns_plat_pcie *cdns_plat_pcie;
-	const struct of_device_id *match;
 	struct device *dev = &pdev->dev;
 	struct pci_host_bridge *bridge;
 	struct cdns_pcie_ep *ep;
@@ -54,11 +52,10 @@ static int cdns_plat_pcie_probe(struct platform_device *pdev)
 	bool is_rc;
 	int ret;
 
-	match = of_match_device(cdns_plat_pcie_of_match, dev);
-	if (!match)
+	data = of_device_get_match_data(dev);
+	if (!data)
 		return -EINVAL;
 
-	data = (struct cdns_plat_pcie_of_data *)match->data;
 	is_rc = data->is_rc;
 
 	pr_debug(" Started %s with is_rc: %d\n", __func__, is_rc);
@@ -126,6 +123,8 @@ static int cdns_plat_pcie_probe(struct platform_device *pdev)
 		if (ret)
 			goto err_init;
 	}
+
+	return 0;
 
  err_init:
  err_get_sync:

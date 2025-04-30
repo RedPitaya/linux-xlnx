@@ -4,7 +4,7 @@
  *
  * (C) Copyright 2020, Xilinx, Inc.
  *
- * Michal Simek <michal.simek@xilinx.com>
+ * Michal Simek <michal.simek@amd.com>
  */
 
 #include <dt-bindings/gpio/gpio.h>
@@ -12,14 +12,10 @@
 
 /* U97 MT35XU02G */
 status = "okay";
-compatible = "xlnx,versal-ospi-1.0", "cadence,qspi", "cdns,qspi-nor";
 bus-num = <2>;
 num-cs = <1>;
 #address-cells = <1>;
 #size-cells = <0>;
-reset-gpios = <&gpio1 0xc GPIO_ACTIVE_HIGH>;
-reset-names = "qspi";
-resets = <&versal_reset VERSAL_RST_OSPI>;
 
 flash@0 {
 	compatible = "mt35xu02g", "micron,m25p80", "jedec,spi-nor";
@@ -34,6 +30,8 @@ flash@0 {
 	spi-tx-bus-width = <8>;
 	spi-rx-bus-width = <8>;
 	spi-max-frequency = <20000000>;
+	no-wp;
+	reset-gpios = <&gpio1 0xc GPIO_ACTIVE_LOW>;
 	partition@0 {
 		label = "spi0-flash0";
 		reg = <0x0 0x8000000>;
