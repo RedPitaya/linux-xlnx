@@ -155,7 +155,7 @@ static long rprx_ioctl(struct file *file, unsigned int cmd , unsigned long arg)
 	 * */
 	case CYCLIC_RX:
 	{
-		dev_info(dev, "ioctl cyclic rx s:0x%lx c:0x%x\n",rx->segment_size,rx->segment_cnt);
+		dev_info(dev, "ioctl cyclic rx s:0x%X c:0x%X\n",rx->segment_size,rx->segment_cnt);
 		smp_rmb();
 		rx->dmastatus=STATUS_BUSSY;
 		rx->d = rx->chan->device->device_prep_dma_cyclic(rx->chan,rx->addrp, rx->segment_size*rx->segment_cnt, rx->segment_size,DMA_DEV_TO_MEM, DMA_CTRL_ACK | DMA_PREP_INTERRUPT);
@@ -186,7 +186,8 @@ static long rprx_ioctl(struct file *file, unsigned int cmd , unsigned long arg)
 	 * single mode transfers were newer tested as much as cyclic and that is the reason that it might still contain some bugs
 	 * */
 	case SINGLE_RX:{
-		dev_info(dev, "single dma s:0x%lx c:0x%x\n",rx->segment_size,rx->segment_cnt);smp_rmb();
+		dev_info(dev, "single dma s:0x%X c:0x%X\n",rx->segment_size,rx->segment_cnt);
+		smp_rmb();
 		rx->d = dmaengine_prep_slave_single(rx->chan,rx->addrp, rx->segment_size*rx->segment_cnt, DMA_DEV_TO_MEM, DMA_CTRL_ACK | DMA_PREP_INTERRUPT);
 		if(!rx->d){
 			dev_err(dev, "rxd not set properly\n");
@@ -208,14 +209,14 @@ static long rprx_ioctl(struct file *file, unsigned int cmd , unsigned long arg)
 	 * */
 	case SET_RX_SGMNT_CNT:{
 		rx->segment_cnt=arg;
-		dev_info(dev, "ioctl segment cnt set to 0x%x \n",rx->segment_cnt);
+		dev_info(dev, "ioctl segment cnt set to 0x%X \n",rx->segment_cnt);
 	}break;
 	/*
 	 *  set size of a segment used by this driver, combined size can only be smaller then what is in device tree or defoults from header file but not smaller than 4kB or larger then 4MB
 	 * */
 	case SET_RX_SGMNT_SIZE:{
 		rx->segment_size=arg;
-		dev_info(dev, "ioctl segment size set to 0x%lx \n",rx->segment_size);
+		dev_info(dev, "ioctl segment size set to 0x%X \n",rx->segment_size);
 	}break;
 	/*
 	 * kernel mesage for debugging
@@ -313,7 +314,7 @@ static int rprx_probe(struct platform_device *pd)
 
    	rx->major_num = MAJOR(rx->dev_num);
 
-	if ((rx->cl = class_create(THIS_MODULE, dev_name(dev))) == NULL) {
+	if ((rx->cl = class_create(dev_name(dev))) == NULL) {
 		unregister_chrdev_region(rx->dev_num, 1);
 		return -1;
 	}
@@ -375,7 +376,7 @@ rmdev:
 static int rprx_remove(struct platform_device *pdev)
 {
 	struct rprx_channel *rx = (struct rprx_channel *)platform_get_drvdata(pdev);
-	const struct device * dev =(const struct device *)&rx->rpdev->dev;
+	struct device * dev =(struct device *)&rx->rpdev->dev;
 	dev_info(dev, "remove\n");
 	if(rx->chan){
 		dma_release_channel(rx->chan);
