@@ -1,16 +1,9 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Xilinx VPSS Scaler
  *
  * Copyright (C) 2017 Xilinx, Inc.
- *
- * This software is licensed under the terms of the GNU General Public
- * License version 2, as published by the Free Software Foundation, and
- * may be copied, distributed, and modified under those terms.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
+ * Copyright (C) 2025, Advanced Micro Devices, Inc. All rights reserved.
  */
 
 #include <linux/clk.h>
@@ -37,21 +30,9 @@
 #define XSCALER_DEF_OUT_HEIGHT		(1080)
 #define XSCALER_DEF_OUT_WIDTH		(1920)
 
-#define XSCALER_HSF			(0x0100)
-#define XSCALER_VSF			(0x0104)
-#define XSCALER_SF_SHIFT		(20)
-#define XSCALER_SF_MASK			(0xffffff)
-#define XSCALER_SOURCE_SIZE		(0x0108)
-#define XSCALER_SIZE_HORZ_SHIFT		(0)
-#define XSCALER_SIZE_VERT_SHIFT		(16)
-#define XSCALER_SIZE_MASK		(0xfff)
-#define XSCALER_HAPERTURE		(0x010c)
-#define XSCALER_VAPERTURE		(0x0110)
-#define XSCALER_APERTURE_START_SHIFT	(0)
-#define XSCALER_APERTURE_END_SHIFT	(16)
-#define XSCALER_OUTPUT_SIZE		(0x0114)
-#define XSCALER_COEF_DATA_IN		(0x0134)
 #define XSCALER_BITSHIFT_16		(16)
+#define XSCALER_PHDATA_SHIFT		(12)
+#define XSCALER_PHDATA_H_SHIFT		(20)
 
 /* Video subsytems block offset */
 #define S_AXIS_RESET_OFF	(0x00010000)
@@ -62,17 +43,9 @@
 #define XGPIO_CH_RESET_SEL		(1)
 #define XGPIO_RESET_MASK_VIDEO_IN	BIT(0)
 #define XGPIO_RESET_MASK_IP_AXIS	BIT(1)
-#define XGPIO_RESET_MASK_IP_AXIMM	BIT(0)
 #define XGPIO_RESET_MASK_ALL_BLOCKS	(XGPIO_RESET_MASK_VIDEO_IN  | \
 						XGPIO_RESET_MASK_IP_AXIS)
 #define XGPIO_DATA_OFFSET		(0x0)
-#define XGPIO_TRI_OFFSET		(0x4)
-#define XGPIO_DATA2_OFFSET		(0x8)
-#define XGPIO_TRI2_OFFSET		(0xc)
-
-#define XGPIO_GIE_OFFSET		(0x11c)
-#define XGPIO_ISR_OFFSET		(0x120)
-#define XGPIO_IER_OFFSET		(0x128)
 #define XGPIO_CHAN_OFFSET		(8)
 #define STEP_PRECISION			(65536)
 
@@ -88,10 +61,11 @@ enum xscaler_vid_reg_fmts {
 #define XSCALER_PPC_1			(1)
 #define XSCALER_PPC_2			(2)
 #define XSCALER_PPC_4			(4)
+#define XSCALER_PPC_8			(8)
 
 #define XV_HSCALER_MAX_H_TAPS           (12)
 #define XV_HSCALER_MAX_H_PHASES         (64)
-#define XV_HSCALER_MAX_LINE_WIDTH       (3840)
+#define XV_HSCALER_MAX_LINE_WIDTH	(8192)
 #define XV_VSCALER_MAX_V_TAPS           (12)
 #define XV_VSCALER_MAX_V_PHASES         (64)
 
@@ -110,16 +84,19 @@ enum xscaler_vid_reg_fmts {
 
 /* Mask definitions for Low and high 16 bits in a 32 bit number */
 #define XHSC_MASK_LOW_16BITS		GENMASK(15, 0)
-#define XHSC_MASK_HIGH_16BITS		GENMASK(31, 16)
 #define XHSC_MASK_LOW_32BITS		GENMASK(31, 0)
+#define XHSC_MASK_LOW_20BITS		GENMASK(19, 0)
+#define XHSC_MASK_LOW_12BITS		GENMASK(11, 0)
 #define XHSC_STEP_PRECISION_SHIFT	(16)
+#define XHSC_HPHASE_STEP_4		(4)
 #define XHSC_HPHASE_SHIFT_BY_6		(6)
 #define XHSC_HPHASE_MULTIPLIER		(9)
+#define XHSC_HPHASE_MULTIPLIER_8PPC	(10)
 #define XHSC_HPHASE_MUL_4PPC		(10)
+#define XHSC_HPHASE_MUL_8PPC		(11)
 
 /* Mask definitions for Low and high 16 bits in a 32 bit number */
 #define XVSC_MASK_LOW_16BITS            GENMASK(15, 0)
-#define XVSC_MASK_HIGH_16BITS           GENMASK(31, 16)
 
 /* XSCALER POWER MACROS */
 #define XSCALER_RESET_ASSERT	(0x1)
@@ -132,9 +109,6 @@ enum xscaler_vid_reg_fmts {
 
 /* H-scaler registers */
 #define XV_HSCALER_CTRL_ADDR_AP_CTRL				(0x0000)
-#define XV_HSCALER_CTRL_ADDR_GIE				(0x0004)
-#define XV_HSCALER_CTRL_ADDR_IER				(0x0008)
-#define XV_HSCALER_CTRL_ADDR_ISR				(0x000c)
 #define XV_HSCALER_CTRL_ADDR_HWREG_HEIGHT_DATA			(0x0010)
 #define XV_HSCALER_CTRL_ADDR_HWREG_WIDTHIN_DATA			(0x0018)
 #define XV_HSCALER_CTRL_ADDR_HWREG_WIDTHOUT_DATA		(0x0020)
@@ -142,7 +116,6 @@ enum xscaler_vid_reg_fmts {
 #define XV_HSCALER_CTRL_ADDR_HWREG_PIXELRATE_DATA		(0x0030)
 #define XV_HSCALER_CTRL_ADDR_HWREG_COLORMODEOUT_DATA		(0X0038)
 #define XV_HSCALER_CTRL_ADDR_HWREG_HFLTCOEFF_BASE		(0x0800)
-#define XV_HSCALER_CTRL_ADDR_HWREG_HFLTCOEFF_HIGH		(0x0bff)
 
 /* Coefficients for 6, 8, 10 and 12 tap filters */
 
@@ -893,12 +866,7 @@ static const s16 XV_fixedcoeff_taps12_SR4[XV_HSCALER_MAX_H_PHASES][XV_HSCALER_TA
 	{ -22, -19,   1, 155, 499,  889, 1059, 879, 487, 147,  -1,  22, }
 };
 
-#define XV_HSCALER_CTRL_WIDTH_HWREG_HFLTCOEFF			(16)
-#define XV_HSCALER_CTRL_DEPTH_HWREG_HFLTCOEFF			(384)
 #define XV_HSCALER_CTRL_ADDR_HWREG_PHASESH_V_BASE		(0x2000)
-#define XV_HSCALER_CTRL_ADDR_HWREG_PHASESH_V_HIGH		(0x3fff)
-#define XV_HSCALER_CTRL_WIDTH_HWREG_PHASESH_V			(18)
-#define XV_HSCALER_CTRL_DEPTH_HWREG_PHASESH_V			(1920)
 #define XV_HSCALER_CTRL_ADDR_HWREG_PHASEH_FIX			(0x4000)
 
 /* H-scaler masks */
@@ -906,19 +874,12 @@ static const s16 XV_fixedcoeff_taps12_SR4[XV_HSCALER_MAX_H_PHASES][XV_HSCALER_TA
 
 /* V-scaler registers */
 #define XV_VSCALER_CTRL_ADDR_AP_CTRL			(0x000)
-#define XV_VSCALER_CTRL_ADDR_GIE			(0x004)
-#define XV_VSCALER_CTRL_ADDR_IER			(0x008)
-#define XV_VSCALER_CTRL_ADDR_ISR			(0x00c)
 #define XV_VSCALER_CTRL_ADDR_HWREG_HEIGHTIN_DATA	(0x010)
 #define XV_VSCALER_CTRL_ADDR_HWREG_WIDTH_DATA		(0x018)
 #define XV_VSCALER_CTRL_ADDR_HWREG_HEIGHTOUT_DATA	(0x020)
 #define XV_VSCALER_CTRL_ADDR_HWREG_LINERATE_DATA	(0x028)
 #define XV_VSCALER_CTRL_ADDR_HWREG_COLORMODE_DATA	(0x030)
 #define XV_VSCALER_CTRL_ADDR_HWREG_VFLTCOEFF_BASE	(0x800)
-#define XV_VSCALER_CTRL_ADDR_HWREG_VFLTCOEFF_HIGH	(0xbff)
-
-#define XV_VSCALER_CTRL_WIDTH_HWREG_VFLTCOEFF		(16)
-#define XV_VSCALER_CTRL_DEPTH_HWREG_VFLTCOEFF		(384)
 
 /* These bits are for xscaler feature flags */
 #define XSCALER_CLK_PROP	BIT(0)
@@ -946,6 +907,7 @@ struct xscaler_feature {
  * @max_pixels: The maximum number of pixels that the H-scaler examines
  * @max_lines: The maximum number of lines that the V-scaler examines
  * @H_phases: The phases needed to program the H-scaler for different taps
+ * @H_phases_h: The phases needed to program the H-scaler for non step 4 use case
  * @hscaler_coeff: The complete array of H-scaler coefficients
  * @vscaler_coeff: The complete array of V-scaler coefficients
  * @is_polyphase: Track if scaling algorithm is polyphase or not
@@ -969,6 +931,7 @@ struct xscaler_device {
 	u32 max_pixels;
 	u32 max_lines;
 	u64 H_phases[XV_HSCALER_MAX_LINE_WIDTH];
+	u64 H_phases_h[XV_HSCALER_MAX_LINE_WIDTH];
 	short hscaler_coeff[XV_HSCALER_MAX_H_PHASES][XV_HSCALER_MAX_H_TAPS];
 	short vscaler_coeff[XV_VSCALER_MAX_V_PHASES][XV_VSCALER_MAX_V_TAPS];
 	bool is_polyphase;
@@ -1025,10 +988,15 @@ xv_hscaler_calculate_phases(struct xscaler_device *xscaler,
 	unsigned int nppc = xscaler->pix_per_clk;
 	unsigned int shift = XHSC_STEP_PRECISION_SHIFT - ilog2(nphases);
 
+	memset(xscaler->H_phases, 0, sizeof(xscaler->H_phases));
+	memset(xscaler->H_phases_h, 0, sizeof(xscaler->H_phases_h));
+
 	loop_width = max_t(u32, width_in, width_out);
 	loop_width = ALIGN(loop_width + nppc - 1, nppc);
 
 	for (x = 0; x < loop_width; x++) {
+		xscaler->H_phases[x] = 0;
+		xscaler->H_phases_h[x] = 0;
 		nr_rds_clck = 0;
 		for (s = 0; s < nppc; s++) {
 			phaseH = (offset >> shift) & (nphases - 1);
@@ -1042,14 +1010,45 @@ xv_hscaler_calculate_phases(struct xscaler_device *xscaler,
 			}
 
 			if (((offset >> XHSC_STEP_PRECISION_SHIFT) == 0) &&
-			    (xwrite_pos < width_out)) {
+			    xwrite_pos < width_out) {
 				/* produce a new output sample */
 				offset += pixel_rate;
 				output_write_en = true;
 				xwrite_pos++;
 			}
 
-			if (nppc == XSCALER_PPC_4) {
+			if (nppc == XSCALER_PPC_8) {
+				if (s < XHSC_HPHASE_STEP_4) {
+					xscaler->H_phases[x] |=
+						((u64)phaseH <<
+						 (s * XHSC_HPHASE_MUL_8PPC));
+					xscaler->H_phases[x] |=
+						((u64)array_idx <<
+						 (XHSC_HPHASE_SHIFT_BY_6 +
+						  (s * XHSC_HPHASE_MUL_8PPC)));
+					if (output_write_en)
+						xscaler->H_phases[x] |=
+							((u64)1 <<
+							 (XHSC_HPHASE_MULTIPLIER_8PPC +
+							  (s * XHSC_HPHASE_MUL_8PPC)));
+				} else {
+					xscaler->H_phases_h[x] |=
+						((u64)phaseH <<
+						 ((s - XHSC_HPHASE_STEP_4)
+						  * XHSC_HPHASE_MUL_8PPC));
+					xscaler->H_phases_h[x] |=
+						((u64)array_idx <<
+						 (XHSC_HPHASE_SHIFT_BY_6 +
+						  ((s - XHSC_HPHASE_STEP_4)
+						   * XHSC_HPHASE_MUL_8PPC)));
+					if (output_write_en)
+						xscaler->H_phases_h[x] |=
+							((u64)1 <<
+							 (XHSC_HPHASE_MULTIPLIER_8PPC +
+							  ((s - XHSC_HPHASE_STEP_4)
+							   * XHSC_HPHASE_MUL_8PPC)));
+				}
+			} else if (nppc == XSCALER_PPC_4) {
 				xscaler->H_phases[x] |=
 					((u64)phaseH <<
 					 (s * XHSC_HPHASE_MUL_4PPC));
@@ -1261,7 +1260,7 @@ static void xv_hscaler_set_coeff(struct xscaler_device *xscaler)
 			       XSCALER_BITSHIFT_16) |
 			       (xscaler->hscaler_coeff[i][rd_indx] &
 			       XHSC_MASK_LOW_16BITS);
-			 xvip_write(&xscaler->xvip, base_addr +
+			xvip_write(&xscaler->xvip, base_addr +
 				    ((i * ntaps / 2 + j) * 4), val);
 		}
 	}
@@ -1411,6 +1410,7 @@ xv_vscaler_setup_video_fmt(struct xscaler_device *xscaler, u32 code_in)
 		break;
 	case MEDIA_BUS_FMT_VUY8_1X24:
 	case MEDIA_BUS_FMT_VUY10_1X30:
+	case MEDIA_BUS_FMT_VUY12_1X36:
 		dev_dbg(xscaler->xvip.dev,
 			"Vscaler Input Media Format YUV 444");
 		video_in = XVIDC_CSF_YCRCB_444;
@@ -1482,6 +1482,7 @@ static int xv_hscaler_setup_video_fmt(struct xscaler_device *xscaler,
 		break;
 	case MEDIA_BUS_FMT_VUY8_1X24:
 	case MEDIA_BUS_FMT_VUY10_1X30:
+	case MEDIA_BUS_FMT_VUY12_1X36:
 		dev_dbg(xscaler->xvip.dev,
 			"Hscaler Output Media Format YUV 444\n");
 		video_out = XVIDC_CSF_YCRCB_444;
@@ -1509,8 +1510,8 @@ xv_hscaler_set_phases(struct xscaler_device *xscaler)
 {
 	u32 loop_width;
 	u32 index = 0, val;
-	u32 offset, i, j = 0, lsb, msb;
-	u64 phasehdata;
+	u32 offset = 0, i, j = 0, lsb, msb, msb2;
+	u64 phasehdata, phasehdata_h;
 
 	loop_width = xscaler->max_pixels / xscaler->pix_per_clk;
 
@@ -1573,6 +1574,36 @@ xv_hscaler_set_phases(struct xscaler_device *xscaler)
 		dev_dbg(xscaler->xvip.dev,
 			"%s : Operating in 4 PPC design", __func__);
 		return;
+	case XSCALER_PPC_8:
+		/*
+		 * phasehdata and phasehdata_h are 64bits and each entry has valid 44
+		 * bits. phasehdata has lower 44 bits and phasehdata_h has higher 44 bits.
+		 * Need to form 3 32b writes from the total 88 bits and
+		 * Write each 32bits into IP registers.
+		 * index is array loc and offset is address offset.
+		 */
+		for (i = 0; i < loop_width; i++) {
+			phasehdata = xscaler->H_phases[index];
+			phasehdata_h = xscaler->H_phases_h[index];
+
+			lsb = lower_32_bits(phasehdata);
+			msb = upper_32_bits(phasehdata);
+			val = (u32)(FIELD_PREP(XHSC_MASK_LOW_20BITS, phasehdata_h));
+			msb |= (val << XSCALER_PHDATA_SHIFT);
+			msb2 = (lower_32_bits(phasehdata_h)) >> XSCALER_PHDATA_H_SHIFT;
+			val = ((u32)(FIELD_PREP(XHSC_MASK_LOW_12BITS,
+							upper_32_bits(phasehdata_h))));
+			msb2 |= (val << XSCALER_PHDATA_SHIFT);
+
+			xvip_write(&xscaler->xvip, offset + (j * 4), lsb);
+			xvip_write(&xscaler->xvip, offset + ((j + 1) * 4), msb);
+			xvip_write(&xscaler->xvip, offset + ((j + 2) * 4), msb2);
+			/* offset + ((j + 3) * 4) register is reserved, so increment offset by 4 */
+			j += 4;
+			index++;
+		}
+		dev_dbg(xscaler->xvip.dev, "Operating in 8 ppc design");
+		return;
 	default:
 		dev_warn(xscaler->xvip.dev, "%s : %d unsupported ppc design!!!\n",
 			 __func__, xscaler->pix_per_clk);
@@ -1598,6 +1629,7 @@ static int xscaler_s_stream(struct v4l2_subdev *subdev, int enable)
 					 XSCALER_RESET_DEASSERT);
 		xscaler_reset(xscaler);
 		memset(xscaler->H_phases, 0, sizeof(xscaler->H_phases));
+		memset(xscaler->H_phases_h, 0, sizeof(xscaler->H_phases_h));
 		return 0;
 	}
 
@@ -1684,7 +1716,7 @@ static int xscaler_enum_frame_size(struct v4l2_subdev *subdev,
 	struct v4l2_mbus_framefmt *format;
 	struct xscaler_device *xscaler = to_scaler(subdev);
 
-	format = v4l2_subdev_get_try_format(subdev, sd_state, fse->pad);
+	format = v4l2_subdev_state_get_format(sd_state, fse->pad);
 	if (fse->index || fse->code != format->code)
 		return -EINVAL;
 
@@ -1705,9 +1737,7 @@ __xscaler_get_pad_format(struct xscaler_device *xscaler,
 
 	switch (which) {
 	case V4L2_SUBDEV_FORMAT_TRY:
-		format = v4l2_subdev_get_try_format(&xscaler->xvip.subdev,
-						    sd_state,
-						    pad);
+		format = v4l2_subdev_state_get_format(sd_state, pad);
 		break;
 	case V4L2_SUBDEV_FORMAT_ACTIVE:
 		format = &xscaler->formats[pad];
@@ -1771,11 +1801,10 @@ xscaler_open(struct v4l2_subdev *subdev, struct v4l2_subdev_fh *fh)
 	struct v4l2_mbus_framefmt *format;
 
 	/* Initialize with default formats */
-	format = v4l2_subdev_get_try_format(subdev, fh->state, XVIP_PAD_SINK);
+	format = v4l2_subdev_state_get_format(fh->state, XVIP_PAD_SINK);
 	*format = xscaler->default_formats[XVIP_PAD_SINK];
 
-	format = v4l2_subdev_get_try_format(subdev, fh->state,
-					    XVIP_PAD_SOURCE);
+	format = v4l2_subdev_state_get_format(fh->state, XVIP_PAD_SOURCE);
 	*format = xscaler->default_formats[XVIP_PAD_SOURCE];
 
 	return 0;
@@ -1787,18 +1816,18 @@ xscaler_close(struct v4l2_subdev *subdev, struct v4l2_subdev_fh *fh)
 	return 0;
 }
 
-static struct v4l2_subdev_video_ops xscaler_video_ops = {
+static const struct v4l2_subdev_video_ops xscaler_video_ops = {
 	.s_stream = xscaler_s_stream,
 };
 
-static struct v4l2_subdev_pad_ops xscaler_pad_ops = {
+static const struct v4l2_subdev_pad_ops xscaler_pad_ops = {
 	.enum_mbus_code		= xvip_enum_mbus_code,
 	.enum_frame_size	= xscaler_enum_frame_size,
 	.get_fmt		= xscaler_get_format,
 	.set_fmt		= xscaler_set_format,
 };
 
-static struct v4l2_subdev_ops xscaler_ops = {
+static const struct v4l2_subdev_ops xscaler_ops = {
 	.video  = &xscaler_video_ops,
 	.pad    = &xscaler_pad_ops,
 };
@@ -1893,6 +1922,11 @@ static int xscaler_parse_of(struct xscaler_device *xscaler)
 				return -EINVAL;
 			}
 			xscaler->vip_formats[port_id] = vip_format;
+
+			/*
+			 * TODO: Add check for xlnx,video-width property
+			 * just like VPSS-CSC driver here
+			 */
 		}
 	}
 
@@ -1928,7 +1962,7 @@ static int xscaler_parse_of(struct xscaler_device *xscaler)
 	 * number of vertical and horizontal taps must match
 	 */
 	switch (xscaler->num_vert_taps) {
-	case XV_HSCALER_TAPS_2:
+	case XV_VSCALER_TAPS_2:
 	case XV_VSCALER_TAPS_4:
 		if (xscaler->num_vert_taps != xscaler->num_hori_taps) {
 			dev_err(dev,
@@ -1954,9 +1988,9 @@ static int xscaler_parse_of(struct xscaler_device *xscaler)
 	if (ret < 0)
 		return ret;
 
-	/* Driver only supports 1 PPC and 2 PPC */
+	/* Driver supports 1, 2, 4 and 8 ppc */
 	if (dt_ppc != XSCALER_PPC_1 && dt_ppc != XSCALER_PPC_2 &&
-	    dt_ppc != XSCALER_PPC_4) {
+	    dt_ppc != XSCALER_PPC_4 && dt_ppc != XSCALER_PPC_8) {
 		dev_err(xscaler->xvip.dev,
 			"Unsupported xlnx,pix-per-clk(%d) value in DT", dt_ppc);
 		return -EINVAL;
@@ -2032,7 +2066,7 @@ static int xscaler_probe(struct platform_device *pdev)
 	} else {
 		ret = xvip_init_resources(&xscaler->xvip);
 		if (ret < 0)
-			return ret;
+			goto res_cleanup;
 	}
 
 	/* Reset the Global IP Reset through a PS GPIO */
@@ -2045,7 +2079,7 @@ static int xscaler_probe(struct platform_device *pdev)
 	v4l2_subdev_init(subdev, &xscaler_ops);
 	subdev->dev = &pdev->dev;
 	subdev->internal_ops = &xscaler_internal_ops;
-	strlcpy(subdev->name, dev_name(&pdev->dev), sizeof(subdev->name));
+	strscpy(subdev->name, dev_name(&pdev->dev), sizeof(subdev->name));
 	v4l2_set_subdevdata(subdev, xscaler);
 	subdev->flags |= V4L2_SUBDEV_FL_HAS_DEVNODE;
 
@@ -2097,7 +2131,7 @@ res_cleanup:
 	return ret;
 }
 
-static int xscaler_remove(struct platform_device *pdev)
+static void xscaler_remove(struct platform_device *pdev)
 {
 	struct xscaler_device *xscaler = platform_get_drvdata(pdev);
 	struct v4l2_subdev *subdev = &xscaler->xvip.subdev;
@@ -2107,8 +2141,6 @@ static int xscaler_remove(struct platform_device *pdev)
 	clk_disable_unprepare(xscaler->aclk_ctrl);
 	clk_disable_unprepare(xscaler->aclk_axis);
 	xvip_cleanup_resources(&xscaler->xvip);
-
-	return 0;
 }
 
 static struct platform_driver xscaler_driver = {

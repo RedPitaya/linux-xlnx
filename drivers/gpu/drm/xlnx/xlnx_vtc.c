@@ -17,6 +17,7 @@
 #include <linux/err.h>
 #include <linux/io.h>
 #include <linux/module.h>
+#include <linux/of.h>
 #include <linux/of_device.h>
 #include <linux/platform_device.h>
 #include <linux/slab.h>
@@ -100,6 +101,8 @@
  * @ppc: pixels per clock
  * @axi_clk: AXI Lite clock
  * @vid_clk: Video clock
+ * @htiming_div_fact: factor used in calculating htimings
+ * @enable_arbitrary_res: arbitrary video resolutions enable
  */
 struct xlnx_vtc {
 	struct xlnx_bridge bridge;
@@ -108,6 +111,8 @@ struct xlnx_vtc {
 	u32 ppc;
 	struct clk *axi_clk;
 	struct clk *vid_clk;
+	u8 htiming_div_fact;
+	bool enable_arbitrary_res;
 };
 
 static inline void xlnx_vtc_writel(void __iomem *base, int offset, u32 val)
@@ -193,14 +198,19 @@ static int xlnx_vtc_set_timing(struct xlnx_bridge *bridge,
 	u32 htotal, hactive, hsync_start, hbackporch_start;
 	u32 vtotal, vactive, vsync_start, vbackporch_start;
 	struct xlnx_vtc *vtc = bridge_to_vtc(bridge);
+	int ret;
 
 	reg = xlnx_vtc_readl(vtc->base, XVTC_CTL);
 	xlnx_vtc_writel(vtc->base, XVTC_CTL, reg & ~XVTC_CTL_RU);
 
-	vm->hactive /= vtc->ppc;
-	vm->hfront_porch /= vtc->ppc;
-	vm->hback_porch /= vtc->ppc;
-	vm->hsync_len /= vtc->ppc;
+	ret = clk_set_rate(vtc->vid_clk, vm->pixelclock / vtc->ppc);
+	if (ret < 0)
+		dev_err(vtc->dev, "failed to set pixel clock rate: %d\n", ret);
+
+	vm->hactive /= vtc->htiming_div_fact;
+	vm->hfront_porch /= vtc->htiming_div_fact;
+	vm->hback_porch /= vtc->htiming_div_fact;
+	vm->hsync_len /= vtc->htiming_div_fact;
 
 	htotal = vm->hactive + vm->hfront_porch + vm->hsync_len +
 		 vm->hback_porch;
@@ -361,6 +371,13 @@ static int xlnx_vtc_probe(struct platform_device *pdev)
 	}
 	dev_info(dev, "vtc ppc = %d\n", vtc->ppc);
 
+	vtc->enable_arbitrary_res = of_property_read_bool(dev->of_node,
+							  "xlnx,arbitrary-res-en");
+	if (vtc->enable_arbitrary_res)
+		vtc->htiming_div_fact = 1;
+	else
+		vtc->htiming_div_fact = vtc->ppc;
+
 	vtc->axi_clk = devm_clk_get(vtc->dev, "s_axi_aclk");
 	if (IS_ERR(vtc->axi_clk)) {
 		ret = PTR_ERR(vtc->axi_clk);
@@ -411,15 +428,13 @@ err_axi_clk:
 	return ret;
 }
 
-static int xlnx_vtc_remove(struct platform_device *pdev)
+static void xlnx_vtc_remove(struct platform_device *pdev)
 {
 	struct xlnx_vtc *vtc = platform_get_drvdata(pdev);
 
 	xlnx_bridge_unregister(&vtc->bridge);
 	clk_disable_unprepare(vtc->vid_clk);
 	clk_disable_unprepare(vtc->axi_clk);
-
-	return 0;
 }
 
 static const struct of_device_id xlnx_vtc_of_match[] = {

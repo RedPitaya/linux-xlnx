@@ -3,6 +3,7 @@
  * Xilinx SDI Rx Subsystem
  *
  * Copyright (C) 2017 Xilinx, Inc.
+ * Copyright (C) 2025, Advanced Micro Devices, Inc. All rights reserved.
  *
  * Contacts: Vishal Sagar <vsagar@xilinx.com>
  *
@@ -88,6 +89,12 @@
 #define XSDIRX_MDL_CTRL_MODE_12GI_EN_MASK	BIT(12)
 #define XSDIRX_MDL_CTRL_MODE_12GF_EN_MASK	BIT(13)
 #define XSDIRX_MDL_CTRL_MODE_AUTO_DET_MASK	GENMASK(13, 8)
+/* Dynamic BPC mode set bits */
+#define XSDIRX_MDL_CTRL_MODE_DYNAMIC_BPC_MASK	GENMASK(15, 14)
+/* Dynamic BPC: set 14th bit for 10-bit mode */
+#define XSDIRX_MDL_CTRL_MODE_10B_DYNAMIC_BPC_MASK	BIT(14)
+/* Dynamic BPC: set 15th bit for 12-bit mode */
+#define XSDIRX_MDL_CTRL_MODE_12B_DYNAMIC_BPC_MASK	BIT(15)
 
 #define XSDIRX_MDL_CTRL_FORCED_MODE_OFFSET	16
 #define XSDIRX_MDL_CTRL_FORCED_MODE_MASK	GENMASK(18, 16)
@@ -305,6 +312,7 @@ enum sdi_family_enc {
  * @iomem: Base address of subsystem
  * @irq: requested irq number
  * @include_edh: EDH processor presence
+ * @dynamic_bpc: holds if dynamic bpc is enabled or disabled
  * @mode: 3G/6G/12G mode
  * @clks: array of clocks
  * @num_clks: number of clocks
@@ -317,6 +325,7 @@ struct xsdirxss_core {
 	void __iomem *iomem;
 	int irq;
 	bool include_edh;
+	bool dynamic_bpc;
 	int mode;
 	struct clk_bulk_data *clks;
 	int num_clks;
@@ -1087,7 +1096,7 @@ static int xsdirx_get_stream_properties(struct xsdirxss_state *state)
 	struct xsdirxss_core *core = &state->core;
 	u32 mode, payload = 0, val, family, valid, tscan;
 	u8 byte1 = 0, active_luma = 0, pic_type = 0, framerate = 0;
-	u8 sampling = XST352_BYTE3_COLOR_FORMAT_422;
+	u8 sampling = XST352_BYTE3_COLOR_FORMAT_422, stream_bpc = 0;
 	struct v4l2_mbus_framefmt *format = &state->format;
 	u32 bpc = XST352_BYTE4_BIT_DEPTH_10;
 	u8 is_3GB;
@@ -1128,11 +1137,32 @@ static int xsdirx_get_stream_properties(struct xsdirxss_state *state)
 				XSDIRX_TS_DET_STAT_SCAN_OFFSET;
 	}
 
-	if ((bpc == XST352_BYTE4_BIT_DEPTH_10 && core->bpc != 10) ||
-	    (bpc == XST352_BYTE4_BIT_DEPTH_12 && core->bpc != 12)) {
-		dev_dbg(core->dev, "Bit depth not supported. bpc = %d core->bpc = %d\n",
-			bpc, core->bpc);
+	if (bpc == XST352_BYTE4_BIT_DEPTH_10) {
+		stream_bpc = 10;
+	} else if (bpc == XST352_BYTE4_BIT_DEPTH_12) {
+		stream_bpc = 12;
+	} else {
+		dev_err(core->dev, "Unsupported BPC value: 0x%x\n", bpc);
 		return -EINVAL;
+	}
+	/* The Dynamic BPC support in SDI Rx  */
+	if (stream_bpc != core->bpc) {
+		if (core->dynamic_bpc) {
+			u32 ctlregval = xsdirxss_read(core, XSDIRX_MDL_CTRL_REG);
+
+			ctlregval &= ~XSDIRX_MDL_CTRL_MODE_DYNAMIC_BPC_MASK;
+			if (bpc == XST352_BYTE4_BIT_DEPTH_10) {
+				ctlregval |= XSDIRX_MDL_CTRL_MODE_10B_DYNAMIC_BPC_MASK;
+				xsdirxss_write(core, XSDIRX_MDL_CTRL_REG, ctlregval);
+			} else if (bpc == XST352_BYTE4_BIT_DEPTH_12) {
+				ctlregval |= XSDIRX_MDL_CTRL_MODE_12B_DYNAMIC_BPC_MASK;
+				xsdirxss_write(core, XSDIRX_MDL_CTRL_REG, ctlregval);
+			}
+		} else {
+			dev_dbg(core->dev, "Bit depth not supported. stream bpc = %d core->bpc = %d\n",
+				stream_bpc, core->bpc);
+			return -EINVAL;
+		}
 	}
 
 	family = (val & XSDIRX_TS_DET_STAT_FAMILY_MASK) >>
@@ -1768,14 +1798,14 @@ static int xsdirxss_s_ctrl(struct v4l2_ctrl *ctrl)
 	case V4L2_CID_XILINX_SDIRX_SEARCH_MODES:
 		if (ctrl->val) {
 			if (core->mode == XSDIRXSS_SDI_STD_3G) {
-				dev_dbg(core->dev, "Upto 3G supported\n");
+				dev_dbg(core->dev, "Up to 3G supported\n");
 				ctrl->val &= ~(BIT(XSDIRX_MODE_6G_OFFSET) |
 					       BIT(XSDIRX_MODE_12GI_OFFSET) |
 					       BIT(XSDIRX_MODE_12GF_OFFSET));
 			}
 
 			if (core->mode == XSDIRXSS_SDI_STD_6G) {
-				dev_dbg(core->dev, "Upto 6G supported\n");
+				dev_dbg(core->dev, "Up to 6G supported\n");
 				ctrl->val &= ~(BIT(XSDIRX_MODE_12GI_OFFSET) |
 					       BIT(XSDIRX_MODE_12GF_OFFSET));
 			}
@@ -1939,8 +1969,9 @@ static int xsdirxss_log_status(struct v4l2_subdev *sd)
 }
 
 /**
- * xsdirxss_g_frame_interval - Get the frame interval
+ * xsdirxss_get_frame_interval - Get the frame interval
  * @sd: V4L2 Sub device
+ * @sd_state: V4L2 subdev state
  * @fi: Pointer to V4l2 Sub device frame interval structure
  *
  * This function is used to get the frame interval.
@@ -1950,8 +1981,9 @@ static int xsdirxss_log_status(struct v4l2_subdev *sd)
  *
  * Return: 0 on success
  */
-static int xsdirxss_g_frame_interval(struct v4l2_subdev *sd,
-				     struct v4l2_subdev_frame_interval *fi)
+static int xsdirxss_get_frame_interval(struct v4l2_subdev *sd,
+				       struct v4l2_subdev_state *sd_state,
+				       struct v4l2_subdev_frame_interval *fi)
 {
 	struct xsdirxss_state *xsdirxss = to_xsdirxssstate(sd);
 	struct xsdirxss_core *core = &xsdirxss->core;
@@ -2046,9 +2078,7 @@ __xsdirxss_get_pad_format(struct xsdirxss_state *xsdirxss,
 
 	switch (which) {
 	case V4L2_SUBDEV_FORMAT_TRY:
-		format = v4l2_subdev_get_try_format(&xsdirxss->subdev,
-						    sd_state,
-						    pad);
+		format = v4l2_subdev_state_get_format(sd_state, pad);
 		break;
 	case V4L2_SUBDEV_FORMAT_ACTIVE:
 		format = &xsdirxss->format;
@@ -2183,12 +2213,13 @@ static int xsdirxss_enum_dv_timings(struct v4l2_subdev *sd,
 /**
  * xsdirxss_query_dv_timings: Query for the current DV timings
  * @sd: pointer to v4l2 subdev structure
+ * @pad: media pad
  * @timings: DV timings structure to be returned.
  *
  * Return: -ENOLCK when video is not locked, -ERANGE when corresponding timing
  * entry is not found or zero on success.
  */
-static int xsdirxss_query_dv_timings(struct v4l2_subdev *sd,
+static int xsdirxss_query_dv_timings(struct v4l2_subdev *sd, unsigned int pad,
 				     struct v4l2_dv_timings *timings)
 {
 	struct xsdirxss_state *state = to_xsdirxssstate(sd);
@@ -2225,7 +2256,7 @@ static int xsdirxss_open(struct v4l2_subdev *sd,
 	struct v4l2_mbus_framefmt *format;
 	struct xsdirxss_state *xsdirxss = to_xsdirxssstate(sd);
 
-	format = v4l2_subdev_get_try_format(sd, fh->state, 0);
+	format = v4l2_subdev_state_get_format(fh->state, 0);
 	*format = xsdirxss->default_format;
 
 	return 0;
@@ -2389,17 +2420,17 @@ static const struct v4l2_subdev_core_ops xsdirxss_core_ops = {
 };
 
 static const struct v4l2_subdev_video_ops xsdirxss_video_ops = {
-	.g_frame_interval = xsdirxss_g_frame_interval,
 	.s_stream = xsdirxss_s_stream,
 	.g_input_status = xsdirxss_g_input_status,
-	.query_dv_timings = xsdirxss_query_dv_timings,
 };
 
 static const struct v4l2_subdev_pad_ops xsdirxss_pad_ops = {
+	.get_frame_interval = xsdirxss_get_frame_interval,
 	.get_fmt = xsdirxss_get_format,
 	.set_fmt = xsdirxss_set_format,
 	.enum_mbus_code = xsdirxss_enum_mbus_code,
 	.enum_dv_timings = xsdirxss_enum_dv_timings,
+	.query_dv_timings = xsdirxss_query_dv_timings,
 };
 
 static const struct v4l2_subdev_ops xsdirxss_ops = {
@@ -2430,6 +2461,10 @@ static int xsdirxss_parse_of(struct xsdirxss_state *xsdirxss)
 	core->include_edh = of_property_read_bool(node, "xlnx,include-edh");
 	dev_dbg(core->dev, "EDH property = %s\n",
 		core->include_edh ? "Present" : "Absent");
+
+	core->dynamic_bpc = of_property_read_bool(node, "xlnx,dyn-bpc");
+	dev_dbg(core->dev, "Dynamic BPC property = %s\n",
+		core->dynamic_bpc ? "Present" : "Absent");
 
 	ret = of_property_read_string(node, "xlnx,line-rate", &sdi_std);
 	if (ret < 0) {
@@ -2547,24 +2582,26 @@ static int xsdirxss_probe(struct platform_device *pdev)
 	xsdirxss->core.dev = &pdev->dev;
 	core = &xsdirxss->core;
 
-	core->rst_gt_gpio = devm_gpiod_get_optional(&pdev->dev, "reset_gt",
-						    GPIOD_OUT_HIGH);
-	if (IS_ERR(core->rst_gt_gpio)) {
-		ret = PTR_ERR(core->rst_gt_gpio);
-		if (ret != -EPROBE_DEFER)
-			dev_err(&pdev->dev, "Reset GT GPIO not setup in DT\n");
-		return ret;
+	core->rst_gt_gpio = devm_gpiod_get_optional(&pdev->dev, "reset-gt", GPIOD_OUT_HIGH);
+	if (!core->rst_gt_gpio) {
+		core->rst_gt_gpio = devm_gpiod_get_optional(&pdev->dev, "reset_gt", GPIOD_OUT_HIGH);
+		if (core->rst_gt_gpio)
+			dev_warn(&pdev->dev, "reset_gt is deprecated. Use reset-gt instead.\n");
 	}
+	if (IS_ERR(core->rst_gt_gpio))
+		return dev_err_probe(&pdev->dev, PTR_ERR(core->rst_gt_gpio),
+				     "Reset GT GPIO not setup in DT\n");
 
-	core->rst_picxo_gpio = devm_gpiod_get_optional(&pdev->dev,
-						       "picxo_reset",
-						       GPIOD_OUT_LOW);
-	if (IS_ERR(core->rst_picxo_gpio)) {
-		ret = PTR_ERR(core->rst_picxo_gpio);
-		if (ret != -EPROBE_DEFER)
-			dev_err(&pdev->dev, "PICXO Reset GPIO not setup in DT\n");
-		return ret;
+	core->rst_picxo_gpio = devm_gpiod_get_optional(&pdev->dev, "picxo-reset", GPIOD_OUT_LOW);
+	if (!core->rst_picxo_gpio) {
+		core->rst_picxo_gpio = devm_gpiod_get_optional(&pdev->dev, "picxo_reset",
+							       GPIOD_OUT_LOW);
+		if (core->rst_picxo_gpio)
+			dev_warn(&pdev->dev, "picxo_reset is deprecated. Use picxo-reset instead.\n");
 	}
+	if (IS_ERR(core->rst_picxo_gpio))
+		return dev_err_probe(&pdev->dev, PTR_ERR(core->rst_picxo_gpio),
+				     "PICXO Reset GPIO not setup in DT\n");
 
 	core->num_clks = ARRAY_SIZE(xsdirxss_clks);
 	core->clks = devm_kcalloc(&pdev->dev, core->num_clks,
@@ -2716,7 +2753,7 @@ clk_err:
 	return ret;
 }
 
-static int xsdirxss_remove(struct platform_device *pdev)
+static void xsdirxss_remove(struct platform_device *pdev)
 {
 	struct xsdirxss_state *xsdirxss = platform_get_drvdata(pdev);
 	struct xsdirxss_core *core = &xsdirxss->core;
@@ -2732,8 +2769,6 @@ static int xsdirxss_remove(struct platform_device *pdev)
 	xsdirx_streamflow_control(core, false);
 
 	clk_bulk_disable_unprepare(core->num_clks, core->clks);
-
-	return 0;
 }
 
 static const struct of_device_id xsdirxss_of_id_table[] = {
@@ -2748,7 +2783,7 @@ static struct platform_driver xsdirxss_driver = {
 		.of_match_table	= xsdirxss_of_id_table,
 	},
 	.probe			= xsdirxss_probe,
-	.remove			= xsdirxss_remove,
+	.remove		= xsdirxss_remove,
 };
 
 module_platform_driver(xsdirxss_driver);

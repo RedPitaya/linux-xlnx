@@ -2,8 +2,8 @@
 /*
  * Xilinx Zynq MPSoC Power Management
  *
- *  Copyright (C) 2014-2019 Xilinx, Inc.
- *  Copyright (C) 2023 Advanced Micro Devices, Inc.
+ *  Copyright (C), 2014 - 2022 Xilinx, Inc.
+ *  Copyright (C), 2022 - 2025 Advanced Micro Devices, Inc.
  *
  *  Davorin Mista <davorin.mista@aggios.com>
  *  Jolly Shah <jollys@xilinx.com>
@@ -286,7 +286,7 @@ static int register_event(struct device *dev, const enum pm_api_cb_id cb_type, c
 static int zynqmp_pm_probe(struct platform_device *pdev)
 {
 	int ret, irq;
-	u32 pm_api_version, pm_family_code, pm_sub_family_code, node_id;
+	u32 pm_api_version, pm_family_code, node_id;
 	struct mbox_client *client;
 
 	ret = zynqmp_pm_get_api_version(&pm_api_version);
@@ -316,11 +316,12 @@ static int zynqmp_pm_probe(struct platform_device *pdev)
 		INIT_WORK(&zynqmp_pm_init_suspend_work->callback_work,
 			  zynqmp_pm_init_suspend_work_fn);
 
-		ret = zynqmp_pm_get_family_info(&pm_family_code, &pm_sub_family_code);
+		ret = zynqmp_pm_get_family_info(&pm_family_code);
 		if (ret < 0)
 			return ret;
 
-		if (pm_sub_family_code == VERSALNET_SUB_FAMILY_CODE)
+		if ((pm_family_code == PM_VERSAL_NET_FAMILY_CODE) ||
+		    (pm_family_code == PM_VERSAL2_FAMILY_CODE))
 			node_id = PM_DEV_ACPU_0_0;
 		else
 			node_id = PM_DEV_ACPU_0;
@@ -393,14 +394,12 @@ static int zynqmp_pm_probe(struct platform_device *pdev)
 	return 0;
 }
 
-static int zynqmp_pm_remove(struct platform_device *pdev)
+static void zynqmp_pm_remove(struct platform_device *pdev)
 {
 	sysfs_remove_file(&pdev->dev.kobj, &dev_attr_suspend_mode.attr);
 
 	if (!rx_chan)
 		mbox_free_channel(rx_chan);
-
-	return 0;
 }
 
 static const struct of_device_id pm_of_match[] = {
@@ -411,7 +410,7 @@ MODULE_DEVICE_TABLE(of, pm_of_match);
 
 static struct platform_driver zynqmp_pm_platform_driver = {
 	.probe = zynqmp_pm_probe,
-	.remove = zynqmp_pm_remove,
+	.remove_new = zynqmp_pm_remove,
 	.driver = {
 		.name = "zynqmp_power",
 		.of_match_table = pm_of_match,

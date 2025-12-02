@@ -69,6 +69,9 @@ static int tx_poll_period = 5;
 module_param_named(tx_poll_period, tx_poll_period, int, 0644);
 MODULE_PARM_DESC(tx_poll_period, "Poll period waiting for ack after send.");
 
+/* Macro to represent SGI type for IPI IRQs */
+#define IPI_IRQ_TYPE_SGI	2
+
 /**
  * struct zynqmp_ipi_mchan - Description of a Xilinx ZynqMP IPI mailbox channel
  * @is_opened: indicate if the IPI channel is opened
@@ -102,7 +105,6 @@ typedef int (*setup_ipi_fn)(struct zynqmp_ipi_mbox *ipi_mbox, struct device_node
  * @remote_id:            remote IPI agent ID
  * @mbox:                 mailbox Controller
  * @mchans:               array for channels, tx channel and rx channel.
- * @irq:                  IPI agent interrupt ID
  * @setup_ipi_fn:         Function Pointer to set up IPI Channels
  */
 struct zynqmp_ipi_mbox {
@@ -120,6 +122,7 @@ struct zynqmp_ipi_mbox {
  * @dev:                  device pointer corresponding to the Xilinx ZynqMP
  *                        IPI agent
  * @irq:                  IPI agent interrupt ID
+ * @irq_type:             IPI SGI or SPI IRQ type
  * @method:               IPI SMC or HVC is going to be used
  * @local_id:             local IPI agent ID
  * @virq_sgi:             IRQ number mapped to SGI
@@ -129,11 +132,12 @@ struct zynqmp_ipi_mbox {
 struct zynqmp_ipi_pdata {
 	struct device *dev;
 	int irq;
+	unsigned int irq_type;
 	unsigned int method;
 	u32 local_id;
 	int virq_sgi;
 	int num_mboxes;
-	struct zynqmp_ipi_mbox ipi_mboxes[];
+	struct zynqmp_ipi_mbox ipi_mboxes[] __counted_by(num_mboxes);
 };
 
 static DEFINE_PER_CPU(struct zynqmp_ipi_pdata *, per_cpu_pdata);
@@ -171,18 +175,17 @@ static void zynqmp_ipi_fw_call(struct zynqmp_ipi_mbox *ipi_mbox,
 static irqreturn_t zynqmp_ipi_interrupt(int irq, void *data)
 {
 	struct zynqmp_ipi_pdata *pdata = data;
+	struct mbox_chan *chan;
 	struct zynqmp_ipi_mbox *ipi_mbox;
 	struct zynqmp_ipi_mchan *mchan;
 	struct zynqmp_ipi_message *msg;
-	int ret, i, status = IRQ_NONE;
-	struct arm_smccc_res res;
-	struct mbox_chan *chan;
 	u64 arg0, arg3;
+	struct arm_smccc_res res;
+	int ret, i, status = IRQ_NONE;
 
 	(void)irq;
 	arg0 = SMC_IPI_MAILBOX_STATUS_ENQUIRY;
 	arg3 = IPI_SMC_ENQUIRY_DIRQ_MASK;
-
 	for (i = 0; i < pdata->num_mboxes; i++) {
 		ipi_mbox = &pdata->ipi_mboxes[i];
 		mchan = &ipi_mbox->mchans[IPI_MB_CHNL_RX];
@@ -857,7 +860,6 @@ static int xlnx_mbox_init_sgi(struct platform_device *pdev,
 		return ret;
 	}
 
-	irq_to_desc(pdata->virq_sgi);
 	irq_set_status_flags(pdata->virq_sgi, IRQ_PER_CPU);
 
 	/* Setup function for the CPU hot-plug cases */
@@ -888,17 +890,14 @@ static void zynqmp_ipi_free_mboxes(struct zynqmp_ipi_pdata *pdata)
 	struct zynqmp_ipi_mbox *ipi_mbox;
 	int i;
 
-	if (pdata->irq < 16)
+	if (pdata->irq_type == IPI_IRQ_TYPE_SGI)
 		xlnx_mbox_cleanup_sgi(pdata);
 
 	i = pdata->num_mboxes;
-	for (; i >= 0; i--) {
+	for (i--; i >= 0; i--) {
 		ipi_mbox = &pdata->ipi_mboxes[i];
-		if (ipi_mbox->dev.parent) {
-			mbox_controller_unregister(&ipi_mbox->mbox);
-			if (device_is_registered(&ipi_mbox->dev))
-				device_unregister(&ipi_mbox->dev);
-		}
+		if (device_is_registered(&ipi_mbox->dev))
+			device_unregister(&ipi_mbox->dev);
 	}
 }
 
@@ -906,7 +905,7 @@ static int zynqmp_ipi_probe(struct platform_device *pdev)
 {
 	struct device *dev = &pdev->dev;
 	struct device_node *nc, *np = pdev->dev.of_node;
-	struct zynqmp_ipi_pdata __percpu *pdata;
+	struct zynqmp_ipi_pdata *pdata;
 	struct of_phandle_args out_irq;
 	struct zynqmp_ipi_mbox *mbox;
 	int num_mboxes, ret = -EINVAL;
@@ -939,11 +938,12 @@ static int zynqmp_ipi_probe(struct platform_device *pdev)
 	}
 
 	pdata->num_mboxes = num_mboxes;
-	mbox = pdata->ipi_mboxes;
 
+	mbox = pdata->ipi_mboxes;
 	for_each_available_child_of_node(np, nc) {
 		mbox->pdata = pdata;
 		mbox->setup_ipi_fn = ipi_fn;
+
 		ret = zynqmp_ipi_mbox_probe(mbox, nc);
 		if (ret) {
 			of_node_put(nc);
@@ -959,14 +959,16 @@ static int zynqmp_ipi_probe(struct platform_device *pdev)
 		dev_err(dev, "failed to parse interrupts\n");
 		goto free_mbox_dev;
 	}
-	ret = out_irq.args[1];
+
+	/* Use interrupt type to distinguish SGI and SPI interrupts */
+	pdata->irq_type = out_irq.args[0];
 
 	/*
 	 * If Interrupt number is in SGI range, then request SGI else request
 	 * IPI system IRQ.
 	 */
-	if (ret < 16) {
-		pdata->irq = ret;
+	if (pdata->irq_type == IPI_IRQ_TYPE_SGI) {
+		pdata->irq = out_irq.args[1];
 		ret = xlnx_mbox_init_sgi(pdev, pdata->irq, pdata);
 		if (ret)
 			goto free_mbox_dev;
@@ -994,14 +996,12 @@ free_mbox_dev:
 	return ret;
 }
 
-static int zynqmp_ipi_remove(struct platform_device *pdev)
+static void zynqmp_ipi_remove(struct platform_device *pdev)
 {
 	struct zynqmp_ipi_pdata *pdata;
 
 	pdata = platform_get_drvdata(pdev);
 	zynqmp_ipi_free_mboxes(pdata);
-
-	return 0;
 }
 
 static const struct of_device_id zynqmp_ipi_of_match[] = {
@@ -1017,7 +1017,7 @@ MODULE_DEVICE_TABLE(of, zynqmp_ipi_of_match);
 
 static struct platform_driver zynqmp_ipi_driver = {
 	.probe = zynqmp_ipi_probe,
-	.remove = zynqmp_ipi_remove,
+	.remove_new = zynqmp_ipi_remove,
 	.driver = {
 		   .name = "zynqmp-ipi",
 		   .of_match_table = of_match_ptr(zynqmp_ipi_of_match),

@@ -33,6 +33,17 @@
 			operating-points-v2 = <&cpu_opp_table>;
 			reg = <0>;
 			cpu-idle-states = <&CPU_SLEEP_0>;
+			d-cache-size = <0x8000>; /* 32kB */
+			d-cache-line-size = <64>;
+			/* 2 ways set associativity */
+			/* cache_size / (line_size / associativity) */
+			d-cache-sets = <256>;
+			i-cache-size = <0xc000>; /* 48kB */
+			i-cache-line-size = <64>;
+			/* 3 ways set associativity */
+			/* cache_size / (line_size / associativity) */
+			i-cache-sets = <256>;
+			next-level-cache = <&l2>;
 		};
 
 		cpu1: cpu@1 {
@@ -42,6 +53,17 @@
 			operating-points-v2 = <&cpu_opp_table>;
 			reg = <1>;
 			cpu-idle-states = <&CPU_SLEEP_0>;
+			d-cache-size = <0x8000>; /* 32kB */
+			d-cache-line-size = <64>;
+			/* 2 ways set associativity */
+			/* cache_size / (line_size / associativity) */
+			d-cache-sets = <256>;
+			i-cache-size = <0xc000>; /* 48kB */
+			i-cache-line-size = <64>;
+			/* 3 ways set associativity */
+			/* cache_size / (line_size / associativity) */
+			i-cache-sets = <256>;
+			next-level-cache = <&l2>;
 		};
 
 		idle-states {
@@ -56,6 +78,17 @@
 				min-residency-us = <10000>;
 			};
 		};
+	};
+
+	l2: l2-cache {
+		compatible = "cache";
+		cache-level = <2>;
+		cache-size = <0x100000>; /* 1 MB */
+		cache-line-size = <64>;
+		/* 4 ways set associativity */
+		/* cache_size / (line_size / associativity) */
+		cache-sets = <4096>;
+		cache-unified;
 	};
 
 	cpu_opp_table: opp-table-cpu {
@@ -122,8 +155,8 @@
 
 	sensor0: versal-thermal-sensor {
 		compatible = "xlnx,versal-thermal";
-		#thermal-sensor-cells = <0>;
-		io-channels = <&sysmon0>;
+		#thermal-sensor-cells = <1>;
+		io-channels = <&sysmon0 0>;
 		io-channel-names = "sysmon-temp-channel";
 	};
 
@@ -131,7 +164,7 @@
 		versal_thermal: versal-thermal {
 			polling-delay-passive = <250>; /* milliseconds */
 			polling-delay = <1000>; /* milliseconds */
-			thermal-sensors = <&sensor0>;
+			thermal-sensors = <&sensor0 0>;
 
 			trips {
 				temp_alert: temp-alert {
@@ -141,6 +174,28 @@
 				};
 
 				ot_crit: ot-crit {
+					temperature = <125000>; /* millicelsius */
+					hysteresis = <0>; /* millicelsius */
+					type = "critical";
+				};
+			};
+
+			cooling-maps {
+			};
+		};
+		versal_thermal_aie: versal-aie-thermal {
+			polling-delay-passive = <250>; /* milliseconds */
+			polling-delay = <1000>; /* milliseconds */
+			thermal-sensors = <&sensor0 1>;
+
+			trips {
+				temp_alert_aie: temp-alert-aie {
+					temperature = <70000>; /* millicelsius */
+					hysteresis = <0>; /* millicelsius */
+					type = "passive";
+				};
+
+				ot_crit_aie: ot-crit-aie {
 					temperature = <125000>; /* millicelsius */
 					hysteresis = <0>; /* millicelsius */
 					type = "critical";
@@ -325,8 +380,6 @@
 			clock-names = "pclk", "hclk", "tx_clk", "rx_clk", "tsu_clk";
 			/* iommus = <&smmu 0x234>; */
 			/* dma-coherent; */
-			#address-cells = <1>;
-			#size-cells = <0>;
 		};
 
 		gem1: ethernet@ff0d0000 {
@@ -337,8 +390,6 @@
 			clock-names = "pclk", "hclk", "tx_clk", "rx_clk", "tsu_clk";
 			/* iommus = <&smmu 0x235>; */
 			/* dma-coherent; */
-			#address-cells = <1>;
-			#size-cells = <0>;
 		};
 
 		gpio0: gpio@ff0b0000 {
@@ -549,12 +600,12 @@
 
 		sysmon0: sysmon@f1270000 {
 			compatible = "xlnx,versal-sysmon";
-			#io-channel-cells = <0>;
 			reg = <0x0 0xf1270000 0x0 0x4000>;
 			interrupts = <0 144 4>;
 			xlnx,numchannels = /bits/8 <0>;
 			#address-cells = <1>;
 			#size-cells = <0>;
+			#io-channel-cells = <1>;
 		};
 
 		sysmon1: sysmon@109270000 {
@@ -564,6 +615,7 @@
 			xlnx,numchannels = /bits/8 <0>;
 			#address-cells = <1>;
 			#size-cells = <0>;
+			#io-channel-cells = <1>;
 		};
 
 		sysmon2: sysmon@111270000 {
@@ -573,6 +625,7 @@
 			xlnx,numchannels = /bits/8 <0>;
 			#address-cells = <1>;
 			#size-cells = <0>;
+			#io-channel-cells = <1>;
 		};
 
 		sysmon3: sysmon@119270000 {
@@ -582,6 +635,7 @@
 			xlnx,numchannels = /bits/8 <0>;
 			#address-cells = <1>;
 			#size-cells = <0>;
+			#io-channel-cells = <1>;
 		};
 
 		ttc0: timer@ff0e0000 {
@@ -652,16 +706,15 @@
 					<0 0 0 3 &pcie_intc_0 2>,
 					<0 0 0 4 &pcie_intc_0 3>;
 			interrupt-map-mask = <0 0 0 7>;
-			interrupt-names = "misc";
 			interrupts = <0 72 4>;
-			interrupt-parent = <&gic>;
 			bus-range = <0x00 0xff>;
 			ranges = <0x02000000 0x00000000 0xe0010000 0x0 0xe0010000 0x00000000 0x10000000>,
 				 <0x43000000 0x00000080 0x00000000 0x00000080 0x00000000 0x00000000 0x80000000>;
 			msi-map = <0x0 &gic_its 0x0 0x10000>;
 			reg = <0x0 0xfca10000 0x0 0x1000>,
-			      <0x6 0x00000000 0x0 0x1000000>;
-			reg-names = "cpm_slcr", "cfg";
+			      <0x6 0x00000000 0x0 0x1000000>,
+			      <0x0 0xfca00000 0x0 0x10000>;
+			reg-names = "cpm_slcr", "cfg", "cpm_crx";
 			pcie_intc_0: interrupt-controller {
 				#address-cells = <0>;
 				#interrupt-cells = <1>;
@@ -681,17 +734,16 @@
 					<0 0 0 3 &pcie_intc_1 2>,
 					<0 0 0 4 &pcie_intc_1 3>;
 			interrupt-map-mask = <0 0 0 7>;
-			interrupt-names = "misc";
 			interrupts = <0 72 4>;
-			interrupt-parent = <&gic>;
 			bus-range = <0x00 0xff>;
 			ranges = <0x02000000 0x0 0xe0000000 0x0 0xe0000000 0x0 0x10000000>,
 				 <0x43000000 0x80 0x00000000 0x80 0x00000000 0x0 0x80000000>;
 			msi-map = <0x0 &gic_its 0x0 0x10000>;
 			reg = <0x00 0xfcdd0000 0x00 0x1000>,
 			      <0x06 0x00000000 0x00 0x1000000>,
-			      <0x00 0xfce20000 0x00 0x1000000>;
-			reg-names = "cpm_slcr", "cfg", "cpm_csr";
+			      <0x00 0xfce20000 0x00 0x10000>,
+			      <0x00 0xfcdc0000 0x00 0x10000>;
+			reg-names = "cpm_slcr", "cfg", "cpm_csr", "cpm_crx";
 			pcie_intc_1: interrupt-controller {
 				#address-cells = <0>;
 				#interrupt-cells = <1>;

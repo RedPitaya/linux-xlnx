@@ -14,8 +14,10 @@
 #include <linux/delay.h>
 #include <linux/device.h>
 #include <linux/gpio/consumer.h>
+#include <linux/of.h>
 #include <linux/of_address.h>
 #include <linux/of_device.h>
+#include <linux/of_platform.h>
 #include <linux/module.h>
 #include <linux/mutex.h>
 #include <linux/phy/phy.h>
@@ -30,6 +32,7 @@
 #include <drm/drm_framebuffer.h>
 #include <drm/drm_crtc.h>
 #include <drm/drm_crtc_helper.h>
+#include <drm/drm_eld.h>
 #include <drm/display/drm_dp_helper.h>
 #include <drm/display/drm_hdmi_helper.h>
 #include <drm/drm_edid.h>
@@ -170,11 +173,6 @@
 					 XDPTX_PHYCONFIG_GTTXRESET_MASK | \
 					 XDPTX_PHYCONFIG_PMARESET_MASK | \
 					 XDPTX_PHYCONFIG_PCSRESET_MASK)
-
-#define XDPTX_PHYCLOCK_FBSETTING_REG		0x234
-#define XDPTX_PHYCLOCK_FBSETTING162_MASK	0x1
-#define XDPTX_PHYCLOCK_FBSETTING270_MASK	0x3
-#define XDPTX_PHYCLOCK_FBSETTING810_MASK	0x5
 
 #define XDPTX_VS_PE_LEVEL_MAXCOUNT		3
 #define XDPTX_VS_LEVEL_MAXCOUNT			0x5
@@ -512,7 +510,6 @@ enum xlnx_dp_train_state {
  * @tx_link_config: source configuration
  * @tx_hdcp: HDCP configuration
  * @hdcpx_keymgmt_base: HDCP key management base address
- * @rx_config: sink configuration
  * @link_config: common link configuration between IP core and sink device
  * @drm: DRM core
  * @mode: current mode between IP core and sink device
@@ -1372,7 +1369,7 @@ static int xlnx_dp_set_linkrate(struct xlnx_dp *dp, u8 bw_code)
 {
 	struct phy_configure_opts_dp *phy_cfg = &dp->phy_opts.dp;
 	int ret;
-	u32 reg, lrate_val = 0, val;
+	u32 lrate_val = 0, val;
 	u8 lane_count = dp->mode.lane_cnt;
 
 	if (!xlnx_dp_txconnected(dp)) {
@@ -1384,31 +1381,26 @@ static int xlnx_dp_set_linkrate(struct xlnx_dp *dp, u8 bw_code)
 
 	switch (bw_code) {
 	case DP_LINK_BW_1_62:
-		reg = XDPTX_PHYCLOCK_FBSETTING162_MASK;
 		phy_cfg->link_rate = XDPTX_REDUCED_BIT_RATE / 100;
 		if (dp->config.versal_gt_present)
 			lrate_val = XDPTX_GTCTL_LINE_RATE_162G;
 		break;
 	case DP_LINK_BW_2_7:
-		reg = XDPTX_PHYCLOCK_FBSETTING270_MASK;
 		phy_cfg->link_rate = XDPTX_HIGH_BIT_RATE_1 / 100;
 		if (dp->config.versal_gt_present)
 			lrate_val = XDPTX_GTCTL_LINE_RATE_270G;
 		break;
 	case DP_LINK_BW_5_4:
-		reg = XDPTX_PHYCLOCK_FBSETTING810_MASK;
 		phy_cfg->link_rate = XDPTX_HIGH_BIT_RATE_2 / 100;
 		if (dp->config.versal_gt_present)
 			lrate_val = XDPTX_GTCTL_LINE_RATE_540G;
 		break;
 	case DP_LINK_BW_8_1:
-		reg = XDPTX_PHYCLOCK_FBSETTING810_MASK;
 		phy_cfg->link_rate = XDPTX_HIGH_BIT_RATE_3 / 100;
 		if (dp->config.versal_gt_present)
 			lrate_val = XDPTX_GTCTL_LINE_RATE_810G;
 		break;
 	default:
-		reg = XDPTX_PHYCLOCK_FBSETTING810_MASK;
 		phy_cfg->link_rate = XDPTX_HIGH_BIT_RATE_3 / 100;
 		if (dp->config.versal_gt_present)
 			lrate_val = XDPTX_GTCTL_LINE_RATE_810G;
@@ -1420,7 +1412,6 @@ static int xlnx_dp_set_linkrate(struct xlnx_dp *dp, u8 bw_code)
 	 */
 	val = xlnx_dp_read(dp->dp_base, XDPTX_ENABLE_REG);
 	xlnx_dp_write(dp->dp_base, XDPTX_ENABLE_REG, 0);
-	xlnx_dp_write(dp->dp_base, XDPTX_PHYCLOCK_FBSETTING_REG, reg);
 	if (val)
 		xlnx_dp_write(dp->dp_base, XDPTX_ENABLE_REG, 1);
 	/* Wait for PHY ready */
@@ -4049,7 +4040,7 @@ error_phy:
 	return ret;
 }
 
-static int xlnx_dp_remove(struct platform_device *pdev)
+static void xlnx_dp_remove(struct platform_device *pdev)
 {
 	struct xlnx_dp *dp = platform_get_drvdata(pdev);
 
@@ -4063,8 +4054,6 @@ static int xlnx_dp_remove(struct platform_device *pdev)
 		phy_exit(dp->phy[0]);
 	component_del(&pdev->dev, &xlnx_dp_component_ops);
 	sysfs_remove_group(&pdev->dev.kobj, &attr_group);
-
-	return 0;
 }
 
 MODULE_DEVICE_TABLE(of, xlnx_dp_of_match);

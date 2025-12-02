@@ -111,17 +111,8 @@ uint32_t xlnx_get_format(struct drm_device *drm)
 	return xlnx_crtc_helper_get_format(xlnx_drm->crtc);
 }
 
-static void xlnx_output_poll_changed(struct drm_device *drm)
-{
-	struct xlnx_drm *xlnx_drm = drm->dev_private;
-
-	if (xlnx_drm->fb)
-		drm_fb_helper_hotplug_event(xlnx_drm->fb);
-}
-
 static const struct drm_mode_config_funcs xlnx_mode_config_funcs = {
 	.fb_create		= xlnx_fb_create,
-	.output_poll_changed	= xlnx_output_poll_changed,
 	.atomic_check		= drm_atomic_helper_check,
 	.atomic_commit		= drm_atomic_helper_commit,
 };
@@ -170,14 +161,6 @@ static int xlnx_drm_release(struct inode *inode, struct file *filp)
 	return drm_release(inode, filp);
 }
 
-static void xlnx_lastclose(struct drm_device *drm)
-{
-	struct xlnx_drm *xlnx_drm = drm->dev_private;
-
-	if (xlnx_drm->fb)
-		drm_fb_helper_restore_fbdev_mode_unlocked(xlnx_drm->fb);
-}
-
 static const struct file_operations xlnx_fops = {
 	.owner		= THIS_MODULE,
 	.open		= drm_open,
@@ -190,13 +173,13 @@ static const struct file_operations xlnx_fops = {
 	.compat_ioctl	= drm_compat_ioctl,
 #endif
 	.llseek		= noop_llseek,
+	.fop_flags      = FOP_UNSIGNED_OFFSET,
 };
 
 static struct drm_driver xlnx_drm_driver = {
 	.driver_features		= DRIVER_MODESET | DRIVER_GEM |
 					  DRIVER_ATOMIC,
 	.open				= xlnx_drm_open,
-	.lastclose			= xlnx_lastclose,
 
 	DRM_GEM_DMA_DRIVER_OPS_VMAP_WITH_DUMB_CREATE(xlnx_gem_cma_dumb_create),
 
@@ -317,6 +300,50 @@ static const struct component_master_ops xlnx_master_ops = {
 	.unbind	= xlnx_unbind,
 };
 
+/*
+ * This is the list of the compatible strings for the PL DRM drivers that still
+ * utilize the xlnx bridge interface. This list needs to be updated with every
+ * additions of the new drivers, compatible string updates and drivers
+ * transitions to the DRM bridge framework. The list should be removed as soon
+ * as the transition of all PL DRM drivers complete.
+ */
+static const char * const xlnx_compatible_components_list[] = {
+	"xlnx,v-mix-5.2",
+	"xlnx,v-mix-5.3",
+	"xlnx,mixer-5.0",
+	"xlnx,mixer-4.0",
+	"xlnx,mixer-3.0",
+	"xlnx,vpss-csc",
+	"xlnx,v-dp-txss-3.0",
+	"xlnx,v-dp-txss-3.1",
+	"xlnx,dsi",
+	"xlnx,v-hdmi-txss1-1.1",
+	"xlnx,v-hdmi-txss1-1.2",
+	"xlnx,v-hdmi-tx-ss-3.1",
+	"xlnx,pl-disp",
+	"xlnx,vpss-scaler",
+	"xlnx,vpss-scaler-2.2",
+	"xlnx,sdi-tx",
+	"xlnx,bridge-v-tc-6.1",
+};
+
+static bool xlnx_check_compatible_component(struct device_node *node)
+{
+	const char *comp_str = NULL;
+	struct property *comp_prop = of_find_property(node, "compatible", NULL);
+
+	do {
+		int i;
+
+		comp_str = of_prop_next_string(comp_prop, comp_str);
+		for (i = 0; comp_str && i < ARRAY_SIZE(xlnx_compatible_components_list); ++i)
+			if (!strcmp(comp_str, xlnx_compatible_components_list[i]))
+				return true;
+	} while (comp_prop && comp_str);
+
+	return false;
+}
+
 static int xlnx_of_component_probe(struct device *master_dev,
 				   int (*compare_of)(struct device *, void *),
 				   const struct component_master_ops *m_ops)
@@ -347,7 +374,9 @@ static int xlnx_of_component_probe(struct device *master_dev,
 			continue;
 		}
 
-		component_match_add(master_dev, &match, compare_of, parent);
+		if (xlnx_check_compatible_component(parent))
+			component_match_add(master_dev, &match, compare_of, parent);
+
 		of_node_put(parent);
 		of_node_put(port);
 	}
@@ -377,8 +406,10 @@ static int xlnx_of_component_probe(struct device *master_dev,
 				of_node_put(remote);
 				continue;
 			}
-			component_match_add(master_dev, &match, compare_of,
-					    remote);
+
+			if (xlnx_check_compatible_component(remote))
+				component_match_add(master_dev, &match, compare_of, remote);
+
 			of_node_put(remote);
 		}
 		of_node_put(parent);
@@ -407,10 +438,9 @@ static int xlnx_platform_probe(struct platform_device *pdev)
 				       &xlnx_master_ops);
 }
 
-static int xlnx_platform_remove(struct platform_device *pdev)
+static void xlnx_platform_remove(struct platform_device *pdev)
 {
 	component_master_del(&pdev->dev, &xlnx_master_ops);
-	return 0;
 }
 
 static void xlnx_platform_shutdown(struct platform_device *pdev)

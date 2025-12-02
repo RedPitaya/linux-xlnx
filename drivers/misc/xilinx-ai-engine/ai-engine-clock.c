@@ -12,6 +12,7 @@
 #include <linux/uaccess.h>
 #include <linux/xlnx-ai-engine.h>
 
+#include "ai-engine-trace.h"
 /**
  * aie_part_get_clk_state_bit() - return bit position of the clock state of a
  *				  tile
@@ -76,6 +77,7 @@ bool aie_part_check_clk_enable_loc(struct aie_partition *apart,
 int aie_part_request_tiles(struct aie_partition *apart, int num_tiles,
 			   struct aie_location *locs)
 {
+	trace_aie_part_request_tiles(apart, num_tiles);
 	if (num_tiles == 0) {
 		aie_resource_set(&apart->tiles_inuse, 0,
 				 apart->tiles_inuse.total);
@@ -86,6 +88,7 @@ int aie_part_request_tiles(struct aie_partition *apart, int num_tiles,
 			return -EINVAL;
 
 		for (n = 0; n < num_tiles; n++) {
+			trace_aie_part_request_tile(apart, locs[n]);
 			int bit = aie_part_get_clk_state_bit(apart, &locs[n]);
 
 			if (bit >= 0)
@@ -108,6 +111,7 @@ int aie_part_request_tiles(struct aie_partition *apart, int num_tiles,
 int aie_part_release_tiles(struct aie_partition *apart, int num_tiles,
 			   struct aie_location *locs)
 {
+	trace_aie_part_release_tiles(apart, num_tiles);
 	if (num_tiles == 0) {
 		aie_resource_clear(&apart->tiles_inuse, 0,
 				   apart->tiles_inuse.total);
@@ -118,6 +122,7 @@ int aie_part_release_tiles(struct aie_partition *apart, int num_tiles,
 			return -EINVAL;
 
 		for (n = 0; n < num_tiles; n++) {
+			trace_aie_part_release_tile(apart, locs[n]);
 			int bit = aie_part_get_clk_state_bit(apart, &locs[n]);
 
 			if (bit >= 0)
@@ -251,29 +256,27 @@ int aie_part_release_tiles_from_user(struct aie_partition *apart,
 }
 
 /**
- * aie_part_set_column_clock_from_user() - enable/disable column clock register
+ * aie2ps_part_set_column_clock_from_user() - enable/disable column clock register
  *                                        from an AI engine partition from
  *                                        user
  * @apart: AI engine partition
- * @user_args: user AI engine request tiles argument
+ * @args: user AI engine request tiles argument
  * @return: 0 for success, negative value for failure.
  *
  * This function will request tiles from user request.h
  */
-int aie_part_set_column_clock_from_user(struct aie_partition *apart,
-					void __user *user_args)
+int aie2ps_part_set_column_clock_from_user(struct aie_partition *apart,
+					   struct aie_column_args *args)
 {
 	u32 part_end_col = apart->range.start.col + apart->range.size.col - 1;
-	u32 node_id = apart->adev->pm_node_id;
-	struct aie_column_args args;
 	struct aie_location locs;
+	struct aie_range range = {};
 	int ret;
 	u32 c;
 
-	if (copy_from_user(&args, user_args, sizeof(args)))
-		return -EFAULT;
+	trace_aie_part_set_column_clock_from_user(apart, args);
 
-	if ((args.start_col + args.num_cols - 1) > part_end_col) {
+	if ((args->start_col + args->num_cols - 1) > part_end_col) {
 		dev_err(&apart->dev, "invalid start column/size column\n");
 		return -EINVAL;
 	}
@@ -283,17 +286,19 @@ int aie_part_set_column_clock_from_user(struct aie_partition *apart,
 	if (ret)
 		return ret;
 
-	if (args.enable) {
-		ret = zynqmp_pm_aie_operation(node_id, args.start_col,
-					      args.num_cols,
-					      XILINX_AIE_OPS_ENB_COL_CLK_BUFF);
+	range.start.col = args->start_col;
+	range.size.col = args->num_cols;
+
+	if (args->enable) {
+		ret = aie_part_pm_ops(apart, NULL, AIE_PART_INIT_OPT_ENB_COLCLK_BUFF, range, 1);
 		if (ret < 0) {
 			dev_err(&apart->dev, "failed to enable clocks for partition\n");
 			goto exit;
 		}
 
-		for (c = (args.start_col + apart->range.start.col);
-				c < (args.start_col + args.num_cols); c++) {
+		for (c = (args->start_col + apart->range.start.col);
+		     c < (args->start_col + args->num_cols);
+		     c++) {
 			int bit;
 
 			locs.col = c;
@@ -307,16 +312,100 @@ int aie_part_set_column_clock_from_user(struct aie_partition *apart,
 			}
 		}
 	} else {
-		ret = zynqmp_pm_aie_operation(node_id, args.start_col,
-					      args.num_cols,
+		ret = aie_part_pm_ops(apart, NULL, AIE_PART_INIT_OPT_DIS_COLCLK_BUFF, range, 1);
+		if (ret < 0) {
+			dev_err(&apart->dev, "failed to disable clocks for partition\n");
+			goto exit;
+		}
+
+		for (c = (args->start_col + apart->range.start.col);
+		     c < (args->start_col + args->num_cols);
+		     c++) {
+			int bit;
+
+			locs.col = c;
+			locs.row = 1;
+			bit = aie_part_get_clk_state_bit(apart, &locs);
+			if (bit >= 0) {
+				aie_resource_clear(&apart->tiles_inuse, bit,
+						   apart->range.size.row - 1);
+				aie_resource_clear(&apart->cores_clk_state, bit,
+						   apart->range.size.row - 1);
+			}
+		}
+	}
+
+exit:
+	mutex_unlock(&apart->mlock);
+	return ret;
+}
+
+/**
+ * aie_part_set_column_clock_from_user() - enable/disable column clock register
+ *                                        from an AI engine partition from
+ *                                        user
+ * @apart: AI engine partition
+ * @args: user AI engine request tiles argument
+ * @return: 0 for success, negative value for failure.
+ *
+ * This function will request tiles from user request.h
+ */
+int aie_part_set_column_clock_from_user(struct aie_partition *apart, struct aie_column_args *args)
+{
+	u32 part_end_col = apart->range.start.col + apart->range.size.col - 1;
+	u32 node_id = apart->aperture->node_id;
+	struct aie_location locs;
+	int ret;
+	u32 c;
+
+	trace_aie_part_set_column_clock_from_user(apart, args);
+
+	if ((args->start_col + args->num_cols - 1) > part_end_col) {
+		dev_err(&apart->dev, "invalid start column/size column\n");
+		return -EINVAL;
+	}
+
+	ret = mutex_lock_interruptible(&apart->mlock);
+
+	if (ret)
+		return ret;
+
+	if (args->enable) {
+		ret = zynqmp_pm_aie_operation(node_id, args->start_col,
+					      args->num_cols,
+					      XILINX_AIE_OPS_ENB_COL_CLK_BUFF);
+		if (ret < 0) {
+			dev_err(&apart->dev, "failed to enable clocks for partition\n");
+			goto exit;
+		}
+
+		for (c = (args->start_col + apart->range.start.col);
+		     c < (args->start_col + args->num_cols);
+		     c++) {
+			int bit;
+
+			locs.col = c;
+			locs.row = 1;
+			bit = aie_part_get_clk_state_bit(apart, &locs);
+			if (bit >= 0) {
+				aie_resource_set(&apart->tiles_inuse, bit,
+						 apart->range.size.row - 1);
+				aie_resource_set(&apart->cores_clk_state, bit,
+						 apart->range.size.row - 1);
+			}
+		}
+	} else {
+		ret = zynqmp_pm_aie_operation(node_id, args->start_col,
+					      args->num_cols,
 					      XILINX_AIE_OPS_DIS_COL_CLK_BUFF);
 		if (ret < 0) {
 			dev_err(&apart->dev, "failed to disable clocks for partition\n");
 			goto exit;
 		}
 
-		for (c = (args.start_col + apart->range.start.col);
-				c < (args.start_col + args.num_cols); c++) {
+		for (c = (args->start_col + apart->range.start.col);
+		     c < (args->start_col + args->num_cols);
+		     c++) {
 			int bit;
 
 			locs.col = c;
@@ -348,11 +437,8 @@ static unsigned long aie_aperture_get_freq_req(struct aie_aperture *aperture)
 {
 	struct aie_partition *apart;
 	unsigned long freq_req = 0;
-	int ret;
 
-	ret = mutex_lock_interruptible(&aperture->mlock);
-	if (ret)
-		return freq_req;
+	mutex_lock(&aperture->mlock);
 
 	list_for_each_entry(apart, &aperture->partitions, node) {
 		if (apart->freq_req > freq_req)
@@ -362,6 +448,40 @@ static unsigned long aie_aperture_get_freq_req(struct aie_aperture *aperture)
 	mutex_unlock(&aperture->mlock);
 
 	return freq_req;
+}
+
+/**
+ * aie_init_freq() - set frequency requirement of an AI engine
+ *
+ * @aperture: AI engine aperture
+ * @return: 0 for success, negative value for failure
+ *
+ * This sets the frequency to the boot time frequency.
+ * as PM drivers resets it during the power on sequence.
+ */
+int aie_init_freq(struct aie_aperture *aperture)
+{
+	u32 boot_qos, current_qos;
+	int ret;
+
+	ret = zynqmp_pm_get_qos(aperture->node_id, &boot_qos, &current_qos);
+	if (ret < 0) {
+		dev_err(&aperture->dev, "Failed to get clock divider value.\n");
+		return -EINVAL;
+	}
+
+	dev_err(&aperture->dev, "current_freq_divider[%x] boot_freq_divider[%x]\n",
+		current_qos, boot_qos);
+
+	ret = zynqmp_pm_set_requirement(aperture->node_id,
+					ZYNQMP_PM_CAPABILITY_ACCESS, boot_qos,
+					ZYNQMP_PM_REQUEST_ACK_BLOCKING);
+	if (ret < 0) {
+		dev_err(&aperture->dev, "Failed to set frequency requirement.\n");
+		return -EINVAL;
+	}
+
+	return 0;
 }
 
 /**

@@ -102,7 +102,7 @@ properties:
       - gmii
       - rgmii
       - sgmii
-      - 1000BaseX
+      - 1000base-x
 
   xlnx,phy-type:
     description:
@@ -165,6 +165,19 @@ properties:
       and "phy-handle" should point to an external PHY if exists.
     maxItems: 1
 
+  dmas:
+    minItems: 2
+    maxItems: 32
+    description: TX and RX DMA channel phandle
+
+  dma-names:
+    items:
+      pattern: "^[tr]x_chan([0-9]|1[0-5])$"
+    description:
+      Should be "tx_chan0", "tx_chan1" ... "tx_chan15" for DMA Tx channel
+      Should be "rx_chan0", "rx_chan1" ... "rx_chan15" for DMA Rx channel
+    minItems: 2
+    maxItems: 32
   dma-coherent: true
 
   xlnx,eth-hasnobuf:
@@ -202,11 +215,13 @@ properties:
     $ref: /schemas/types.yaml#/definitions/phandle
     description: Handle to AXI GPIO instance for GT PLL mask control.
       This is required to control the common PLL mask bits.
+    deprecated: true
 
   xlnx,gtctrl:
     $ref: /schemas/types.yaml#/definitions/phandle
     description: Handle to AXI GPIO instance for GT speed and reset
       control for each MRMAC lane.
+    deprecated: true
 
   xlnx,phcindex:
     $ref: /schemas/types.yaml#/definitions/uint32
@@ -221,31 +236,66 @@ properties:
       ethernet IP. Can be either "1G / 10G", which is the default switching
       capability if this property is not present or "1G / 10G / 25G".
 
+  xlnx,has-auto-neg:
+    type: boolean
+    description: Indicates whether IP supports Auto Negotiation
+      and Link Training.
+
   max-speed: true
 
   gt_ctrl-gpios:
+    deprecated: true
+
+  gt-ctrl-gpios:
     description: Phandle and specifier for GT control GPIO used to
       configure GT.
 
   gt_rx_dpath-gpios:
+    deprecated: true
+
+  gt-rx-dpath-gpios:
     description: Phandle and specifier for the GPIO used to
       reset GT Rx datapath.
 
   gt_tx_dpath-gpios:
+    deprecated: true
+
+  gt-tx-dpath-gpios:
     description: Phandle and specifier for the GPIO used to
       reset GT Tx datapath.
 
   gt_tx_rst_done-gpios:
+    deprecated: true
+
+  gt-tx-rst-done-gpios:
     description: Phandle and specifier for the GPIO used to
       get GT Tx reset status.
 
   gt_rx_rst_done-gpios:
+    deprecated: true
+
+  gt-rx-rst-done-gpios:
     description: Phandle and specifier for the GPIO used to
       get GT Rx reset status.
 
   gt_rsts-gpios:
+    deprecated: true
+
+  gt-rsts-gpios:
     description: Phandle and specifier for the GPIO used to
       reset Tx and Rx serdes.
+
+  gt-ctrl-rate-gpios:
+    description: Phandle and specifier for the GPIO used to
+      set GT Control Rate.
+
+  xlnx,gt-mode:
+    description: Describes GT Quad interface operating mode.
+    $ref: /schemas/types.yaml#/definitions/string
+
+  xlnx,axistream-dwidth:
+    description: Describes AXI4-stream data width.
+    $ref: /schemas/types.yaml#/definitions/uint32
 
   reg-names:
     oneOf:
@@ -319,11 +369,48 @@ allOf:
         xlnx,phcindex:
           enum: [0, 1, 2, 3]
 
+        xlnx,gt-mode:
+          enum:
+            - narrow  # 10G/25G
+            - wide  # 10G/25G
+            - xlaui4_narrow # 40G
+            - xlaui4_wide # 40G
+            - laui2_narrow # 50G
+            - laui2_wide  # 50G
+            - 50laui1_narrow  # 50G
+            - caui2_narrow  # 100G
+            - caui4_narrow  # 100G
+            - caui4_wide  # 100G
+
+        xlnx,axistream-dwidth:
+          enum: [32, 64, 128, 256, 384]
+
+        gt-ctrl-rate-gpios:
+          maxItems: 2
+
+        gt-ctrl-gpios:
+          maxItems: 4
+
+        gt-rx-dpath-gpios:
+          maxItems: 1
+
+        gt-tx-dpath-gpios:
+          maxItems: 1
+
+        gt-rx-rst-done-gpios:
+          maxItems: 4
+
+        gt-tx-rst-done-gpios:
+          maxItems: 4
+
       required:
         - max-speed
         - xlnx,gtlane
-        - xlnx,gtpll
-        - xlnx,gtctrl
+        - gt-ctrl-gpios
+        - gt-rx-dpath-gpios
+        - gt-tx-dpath-gpios
+        - gt-rx-rst-done-gpios
+        - gt-tx-rst-done-gpios
 
   - if:
       properties:
@@ -363,32 +450,32 @@ allOf:
         max-speed:
           enum: [100000, 200000, 400000]
 
-        gt_ctrl-gpios:
+        gt-ctrl-gpios:
           maxItems: 32
 
-        gt_rx_dpath-gpios:
+        gt-rx-dpath-gpios:
           maxItems: 23
 
-        gt_tx_dpath-gpios:
+        gt-tx-dpath-gpios:
           maxItems: 23
 
-        gt_tx_rst_done-gpios:
+        gt-tx-rst-done-gpios:
           maxItems: 24
 
-        gt_rx_rst_done-gpios:
+        gt-rx-rst-done-gpios:
           maxItems: 24
 
-        gt_rsts-gpios:
+        gt-rsts-gpios:
           maxItems: 14
 
       required:
         - max-speed
-        - gt_ctrl-gpios
-        - gt_rx_dpath-gpios
-        - gt_tx_dpath-gpios
-        - gt_tx_rst_done-gpios
-        - gt_rx_rst_done-gpios
-        - gt_rsts-gpios
+        - gt-ctrl-gpios
+        - gt-rx-dpath-gpios
+        - gt-tx-dpath-gpios
+        - gt-tx-rst-done-gpios
+        - gt-rx-rst-done-gpios
+        - gt-rsts-gpios
 
 additionalProperties: false
 
@@ -402,6 +489,8 @@ examples:
         clocks = <&axi_clk>, <&axi_clk>, <&pl_enet_ref_clk>, <&mgt_clk>;
         phy-mode = "mii";
         reg = <0x40c00000 0x40000>,<0x50c00000 0x40000>;
+        dmas = <&xilinx_dma 0>, <&xilinx_dma 1>;
+        dma-names = "tx_chan0", "rx_chan0";
         xlnx,rxcsum = <0x2>;
         xlnx,rxmem = <0x800>;
         xlnx,txcsum = <0x2>;
@@ -444,16 +533,6 @@ examples:
 
 # 3) #Example for MRMAC Ethernet subsystem
   - |
-    gt_pll: gpio@a4000000 {
-        reg = <0xa4000000 0x10000>;
-
-      };
-
-    gt_ctrl: gpio@a4010000 {
-        reg = <0xa4010000 0x40000>;
-
-    };
-
     mrmac: ethernet@80000000 {
         axistream-connected = <&dma>;
         compatible = "xlnx,mrmac-ethernet-1.0";
@@ -461,12 +540,18 @@ examples:
         interrupt-parent = <&gic>;
         interrupts = <0 91 4>;
         max-speed = <10000>;
-        xlnx,gtpll = <&gt_pll>;
-        xlnx,gtctrl = <&gt_ctrl>;
         xlnx,gtlane = <0x0>;
         xlnx,rxmem = <0x8000>;
         ptp-hardware-clock = <&ptp_device>;
 
+        gt-ctrl-rate-gpios = <&gpio4 0 0>, <&gpio4 1 0>;
+
+        gt-ctrl-gpios = <&gpio4 32 0>, <&gpio5 32 0>;
+
+        gt-rx-dpath-gpios = <&gpio4 33 0>;
+        gt-tx-dpath-gpios = <&gpio4 34 0>;
+        gt-rx-rst-done-gpios = <&gpio6 32 0>, <&gpio6 33 0>, <&gpio6 34 0>, <&gpio6 35 0>;
+        gt-tx-rst-done-gpios = <&gpio6 36 0>, <&gpio6 37 0>, <&gpio6 38 0>, <&gpio6 39 0>;
     };
 
 # 4) #Example for DCMAC Ethernet subsystem
@@ -501,36 +586,36 @@ examples:
         xlnx,rxmem = <0x8000>;
         max-speed = <100000>;
 
-        gt_ctrl-gpios = <&gpio1 0 0>, <&gpio1 1 0>, <&gpio1 2 0>, <&gpio1 3 0>, <&gpio1 4 0>, <&gpio1 5 0>,
+        gt-ctrl-gpios = <&gpio1 0 0>, <&gpio1 1 0>, <&gpio1 2 0>, <&gpio1 3 0>, <&gpio1 4 0>, <&gpio1 5 0>,
         <&gpio1 6 0>, <&gpio1 7 0>, <&gpio1 8 0>, <&gpio1 9 0>, <&gpio1 10 0>, <&gpio1 11 0>, <&gpio1 12 0>,
         <&gpio1 13 0>, <&gpio1 14 0>, <&gpio1 15 0>, <&gpio1 16 0>, <&gpio1 17 0>, <&gpio1 18 0>,
         <&gpio1 19 0>, <&gpio1 20 0>, <&gpio1 21 0>, <&gpio1 22 0>, <&gpio1 23 0>, <&gpio1 24 0>,
         <&gpio1 25 0>, <&gpio1 26 0>, <&gpio1 27 0>, <&gpio1 28 0>, <&gpio1 29 0>, <&gpio1 30 0>,
         <&gpio1 31 0>;
 
-        gt_rx_dpath-gpios = <&gpio2 0 0>, <&gpio2 1 0>, <&gpio2 2 0>, <&gpio2 3 0>, <&gpio2 4 0>,
+        gt-rx-dpath-gpios = <&gpio2 0 0>, <&gpio2 1 0>, <&gpio2 2 0>, <&gpio2 3 0>, <&gpio2 4 0>,
         <&gpio2 5 0>, <&gpio2 6 0>, <&gpio2 7 0>, <&gpio2 8 0>, <&gpio2 9 0>, <&gpio2 10 0>, <&gpio2 11 0>,
         <&gpio2 12 0>, <&gpio2 13 0>, <&gpio2 14 0>, <&gpio2 15 0>, <&gpio2 16 0>, <&gpio2 17 0>,
         <&gpio2 18 0>, <&gpio2 19 0>, <&gpio2 20 0>, <&gpio2 21 0>, <&gpio2 22 0>;
 
-        gt_tx_dpath-gpios = <&gpio2 0 0>, <&gpio2 1 0>, <&gpio2 2 0>, <&gpio2 3 0>, <&gpio2 4 0>,
+        gt-tx-dpath-gpios = <&gpio2 0 0>, <&gpio2 1 0>, <&gpio2 2 0>, <&gpio2 3 0>, <&gpio2 4 0>,
         <&gpio2 5 0>, <&gpio2 6 0>, <&gpio2 7 0>, <&gpio2 8 0>, <&gpio2 9 0>, <&gpio2 10 0>, <&gpio2 11 0>,
         <&gpio2 12 0>, <&gpio2 13 0>, <&gpio2 14 0>, <&gpio2 15 0>, <&gpio2 16 0>, <&gpio2 17 0>,
         <&gpio2 18 0>, <&gpio2 19 0>, <&gpio2 20 0>, <&gpio2 21 0>, <&gpio2 22 0>;
 
-        gt_tx_rst_done-gpios =  <&gpio3 0 0>, <&gpio3 1 0>, <&gpio3 2 0>, <&gpio3 3 0>, <&gpio3 4 0>,
+        gt-tx-rst-done-gpios =  <&gpio3 0 0>, <&gpio3 1 0>, <&gpio3 2 0>, <&gpio3 3 0>, <&gpio3 4 0>,
         <&gpio3 5 0>, <&gpio3 6 0>, <&gpio3 7 0>, <&gpio3 8 0>, <&gpio3 9 0>, <&gpio3 10 0>,
         <&gpio3 11 0>, <&gpio3 12 0>, <&gpio3 13 0>, <&gpio3 14 0>, <&gpio3 15 0>, <&gpio3 16 0>,
         <&gpio3 17 0>, <&gpio3 18 0>, <&gpio3 19 0>, <&gpio3 20 0>, <&gpio3 21 0>, <&gpio3 22 0>,
         <&gpio3 23 0>;
 
-        gt_rx_rst_done-gpios =  <&gpio3 24 0>, <&gpio3 25 0>, <&gpio3 26 0>, <&gpio3 27 0>,
+        gt-rx-rst-done-gpios =  <&gpio3 24 0>, <&gpio3 25 0>, <&gpio3 26 0>, <&gpio3 27 0>,
         <&gpio3 28 0>, <&gpio3 29 0>, <&gpio3 30 0>, <&gpio3 31 0>, <&gpio3 32 0>, <&gpio3 33 0>,
         <&gpio3 34 0>, <&gpio3 35 0>, <&gpio3 36 0>, <&gpio3 37 0>, <&gpio3 38 0>, <&gpio3 39 0>,
         <&gpio3 40 0>, <&gpio3 41 0>, <&gpio3 42 0>, <&gpio3 43 0>, <&gpio3 44 0>, <&gpio3 45 0>,
         <&gpio3 46 0>, <&gpio3 47 0>;
 
-        gt_rsts-gpios = <&gpio3 0 0>, <&gpio3 1 0>, <&gpio3 2 0>, <&gpio3 3 0>, <&gpio3 4 0>, <&gpio3 5 0>,
+        gt-rsts-gpios = <&gpio3 0 0>, <&gpio3 1 0>, <&gpio3 2 0>, <&gpio3 3 0>, <&gpio3 4 0>, <&gpio3 5 0>,
         <&gpio3 6 0>, <&gpio3 7 0>, <&gpio3 8 0>, <&gpio3 9 0>, <&gpio3 10 0>, <&gpio3 11 0>, <&gpio3 12 0>,
         <&gpio3 13 0>;
     };

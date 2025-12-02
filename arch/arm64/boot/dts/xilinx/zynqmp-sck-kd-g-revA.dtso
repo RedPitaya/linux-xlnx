@@ -22,6 +22,10 @@
 		     "xlnx,zynqmp-sk-kd240", "xlnx,zynqmp";
 	model = "ZynqMP KD240 revA/B/1";
 
+	aliases {
+		ethernet0 = "/axi/ethernet@ff0c0000"; /* &gem1 */
+	};
+
 	ina260-u3 {
 		compatible = "iio-hwmon";
 		io-channels = <&u3 0>, <&u3 1>, <&u3 2>;
@@ -102,11 +106,6 @@
 	phys = <&psgtr 2 PHY_TYPE_USB3 0 2>;
 	reset-gpios = <&slg7xl45106 0 GPIO_ACTIVE_LOW>;
 	assigned-clock-rates = <250000000>, <20000000>;
-
-	usb2244: usb-sd { /* u41 */
-		compatible = "microchip,usb2244";
-		reset-gpios = <&slg7xl45106 2 GPIO_ACTIVE_LOW>;
-	};
 };
 
 &dwc3_0 {

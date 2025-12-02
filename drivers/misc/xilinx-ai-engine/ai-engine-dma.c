@@ -14,6 +14,7 @@
 #include <linux/types.h>
 #include <linux/uaccess.h>
 
+#include "ai-engine-trace.h"
 /**
  * struct aie_dmabuf - AI engine dmabuf information
  * @attach: dmabuf attachment pointer
@@ -201,8 +202,10 @@ static int aie_part_set_shimdma_bd(struct aie_partition *apart,
 	regoff = aie_aperture_cal_regoff(aperture, loc_adjust, intile_regoff);
 
 	for (i = 0; i < shim_dma->bd_len / (sizeof(*bd));
-	     i++, regoff += sizeof(*bd))
+	     i++, regoff += sizeof(*bd)) {
 		iowrite32(bd[i], aperture->base + regoff);
+		trace_aie_part_set_shimdma_bd(apart, loc, bd_id, bd[i], i);
+	}
 	return 0;
 }
 
@@ -477,31 +480,26 @@ int aie_dma_end_cpu_access(struct dma_buf *dmabuf,
 }
 
 /**
- * aie_part_attach_dmabuf_req() - Handle attaching dmabuf to an AI engine
- *				  partition request
+ * aie_part_attach_dmabuf_fd() - Handle attaching dmabuf to an AI engine
+ *				 partition for given dmabuf file descriptor
  * @apart: AI engine partition
- * @user_args: user AI engine dmabuf argument
+ * @dmabuf_fd: DMABUF file descriptor
  *
  * @return: 0 for success, negative value for failure
  *
  * This function attaches a dmabuf to the specified AI engine partition and map
  * the attachment. It checks if the dmabuf is already attached, if it is not
- * attached, attach it. It returns the number of entries of the attachment to
- * the AI engine dmabuf user argument. If user wants to know the sg list, it
- * can use AI engine get sg ioctl.
+ * attached, attach it.
  */
-long aie_part_attach_dmabuf_req(struct aie_partition *apart,
-				void __user *user_args)
+long aie_part_attach_dmabuf_fd(struct aie_partition *apart, int dmabuf_fd)
 {
 	struct aie_dmabuf *adbuf;
 	struct dma_buf *dbuf;
 	long ret;
-	int dmabuf_fd = (int)(uintptr_t)user_args;
 
 	dbuf = dma_buf_get(dmabuf_fd);
 	if (IS_ERR(dbuf)) {
-		dev_err(&apart->dev, "failed to get dmabuf from %d.\n",
-			dmabuf_fd);
+		dev_err(&apart->dev, "failed to get dmabuf from %d", dmabuf_fd);
 		return PTR_ERR(dbuf);
 	}
 
@@ -520,10 +518,77 @@ long aie_part_attach_dmabuf_req(struct aie_partition *apart,
 	mutex_unlock(&apart->mlock);
 
 	if (IS_ERR(adbuf)) {
-		dev_err(&apart->dev, "failed to attach dmabuf\n");
+		dev_err(&apart->dev, "failed to attach dmabuf");
 		dma_buf_put(dbuf);
 		return PTR_ERR(adbuf);
 	}
+
+	return 0;
+}
+
+/**
+ * aie_part_attach_dmabuf_req() - Handle attaching dmabuf to an AI engine
+ *				  partition request
+ * @apart: AI engine partition
+ * @user_args: user AI engine dmabuf argument
+ *
+ * @return: 0 for success, negative value for failure
+ *
+ * This function attaches a dmabuf to the specified AI engine partition and map
+ * the attachment. It checks if the dmabuf is already attached, if it is not
+ * attached, attach it. It returns the number of entries of the attachment to
+ * the AI engine dmabuf user argument. If user wants to know the sg list, it
+ * can use AI engine get sg ioctl.
+ */
+long aie_part_attach_dmabuf_req(struct aie_partition *apart,
+				void __user *user_args)
+{
+	int dmabuf_fd = (int)(uintptr_t)user_args;
+
+	trace_aie_part_attach_dmabuf_req(apart, dmabuf_fd);
+	return aie_part_attach_dmabuf_fd(apart, dmabuf_fd);
+}
+
+/**
+ * aie_part_detach_dmabuf_fd() - Handle detaching dmabuf from an AI engine
+ *				 partition given a file descriptor
+ * @apart: AI engine partition
+ * @dmabuf_fd: DMABUF file descriptor
+ *
+ * @return: 0 for success, negative value for failure
+ *
+ * This function unmaps and detaches a dmabuf from the specified AI engine
+ * partition.
+ */
+long aie_part_detach_dmabuf_fd(struct aie_partition *apart, int dmabuf_fd)
+{
+	struct aie_dmabuf *adbuf;
+	struct dma_buf *dbuf;
+	int ret;
+
+	dbuf = dma_buf_get(dmabuf_fd);
+	if (IS_ERR(dbuf)) {
+		dev_err(&apart->dev, "failed to get dmabuf %d", dmabuf_fd);
+		return PTR_ERR(dbuf);
+	}
+
+	ret = mutex_lock_interruptible(&apart->mlock);
+	if (ret) {
+		dma_buf_put(dbuf);
+		return ret;
+	}
+
+	adbuf = aie_part_find_dmabuf(apart, dbuf);
+	dma_buf_put(dbuf);
+	if (!adbuf) {
+		dev_err(&apart->dev, "failed to find dmabuf %d", dmabuf_fd);
+		mutex_unlock(&apart->mlock);
+		return -EINVAL;
+	}
+
+	aie_part_dmabuf_attach_put(adbuf);
+
+	mutex_unlock(&apart->mlock);
 
 	return 0;
 }
@@ -542,38 +607,200 @@ long aie_part_attach_dmabuf_req(struct aie_partition *apart,
 long aie_part_detach_dmabuf_req(struct aie_partition *apart,
 				void __user *user_args)
 {
-	struct aie_dmabuf *adbuf;
-	struct dma_buf *dbuf;
-	int dmabuf_fd;
-	int ret;
+	int dmabuf_fd = (int)(uintptr_t)user_args;
 
-	dmabuf_fd = (int)(uintptr_t)user_args;
+	trace_aie_part_detach_dmabuf_req(apart, dmabuf_fd);
+	return aie_part_detach_dmabuf_fd(apart, dmabuf_fd);
+}
 
-	dbuf = dma_buf_get(dmabuf_fd);
-	if (IS_ERR(dbuf)) {
-		dev_err(&apart->dev, "failed to get dmabuf %d.\n", dmabuf_fd);
-		return PTR_ERR(dbuf);
-	}
+/**
+ * aie_part_push_bd() - push buffer descriptor to DMA task queue
+ * @apart: AI engine partition
+ * @loc: AI engine tile location
+ * @bd_id: buffer descriptor index
+ * @dir: direction of data movement (MM2S, S2MM)
+ * @chan_id: dma channel index
+ *
+ * @return: 0 for success, -EINVAL for failure
+ */
+int aie_part_push_bd(struct aie_partition *apart, struct aie_location *loc,
+		     u8 bd_id, u8 dir, u8 chan_id)
+{
+	struct aie_device *adev = apart->adev;
+	const struct aie_dma_attr *dma_attr;
+	u32 regval, offset;
+	void __iomem *va;
+	u8 ttype;
 
-	ret = mutex_lock_interruptible(&apart->mlock);
-	if (ret) {
-		dma_buf_put(dbuf);
-		return ret;
-	}
-
-	adbuf = aie_part_find_dmabuf(apart, dbuf);
-	dma_buf_put(dbuf);
-	if (!adbuf) {
-		dev_err(&apart->dev, "failed to find dmabuf %d.\n", dmabuf_fd);
-		mutex_unlock(&apart->mlock);
+	ttype = adev->ops->get_tile_type(adev, loc);
+	if (ttype != AIE_TILE_TYPE_SHIMNOC) {
+		dev_err(&apart->dev, "invalid tile type");
 		return -EINVAL;
 	}
 
-	aie_part_dmabuf_attach_put(adbuf);
+	dma_attr = adev->shim_dma;
+	/* check valid direction and channel id */
+	if (dir == AIE_MM2S_DIR) {
+		if (chan_id >= dma_attr->num_mm2s_chan)
+			return -EINVAL;
+	} else if (dir == AIE_S2MM_DIR) {
+		if (chan_id >= dma_attr->num_s2mm_chan)
+			return -EINVAL;
+	} else {
+		return -EINVAL;
+	}
 
-	mutex_unlock(&apart->mlock);
+	offset = dma_attr->taskq_bd.regoff +
+		(dma_attr->chan_idx_offset * chan_id) +
+		(dma_attr->chan_dir_offset * dir);
+	regval = aie_get_field_val(&dma_attr->taskq_bd, bd_id);
+	va = apart->aperture->base + aie_cal_regoff(adev, *loc, offset);
+
+	writel(regval, va);
+	return 0;
+}
+
+/**
+ * aie_part_set_valid_bd() - set buffer descriptor valid field
+ * @apart: AI engine partition
+ * @loc: AI engine tile location
+ * @bd: pointer to buffer descriptor data
+ *
+ * @return: 0 for success, -EINVAL for failure
+ */
+int aie_part_set_valid_bd(struct aie_partition *apart, struct aie_location loc,
+			  u32 *bd)
+{
+	struct aie_device *adev = apart->adev;
+	const struct aie_bd_attr *bd_attr;
+	u32 *tmpbd;
+	u8 ttype;
+
+	ttype = adev->ops->get_tile_type(apart->adev, &loc);
+	switch (ttype) {
+	case AIE_TILE_TYPE_TILE:
+		bd_attr = adev->tile_bd;
+		break;
+	case AIE_TILE_TYPE_MEMORY:
+		bd_attr = adev->memtile_bd;
+		break;
+	case AIE_TILE_TYPE_SHIMNOC:
+		bd_attr = adev->shim_bd;
+		break;
+	default:
+		return -EINVAL;
+	}
+
+	if (!bd_attr || !bd)
+		return -EINVAL;
+
+	tmpbd = (u32 *)((char *)bd + bd_attr->valid_bd.regoff);
+	*tmpbd |= aie_get_field_val(&bd_attr->valid_bd, 1);
 
 	return 0;
+}
+
+/**
+ * aie_part_set_len_bd() - set buffer descriptor length field
+ * @apart: AI engine partition
+ * @loc: AI engine tile location
+ * @bd: pointer to buffer descriptor data
+ * @len: length of data
+ *
+ * @return: 0 for success, -EINVAL for failure
+ */
+int aie_part_set_len_bd(struct aie_partition *apart, struct aie_location loc,
+			u32 *bd, size_t len)
+{
+	struct aie_device *adev = apart->adev;
+	const struct aie_bd_attr *bd_attr;
+	u32 *tmpbd;
+	u8 ttype;
+
+	ttype = adev->ops->get_tile_type(apart->adev, &loc);
+	switch (ttype) {
+	case AIE_TILE_TYPE_TILE:
+		bd_attr = adev->tile_bd;
+		break;
+	case AIE_TILE_TYPE_MEMORY:
+		bd_attr = adev->memtile_bd;
+		break;
+	case AIE_TILE_TYPE_SHIMNOC:
+		bd_attr = adev->shim_bd;
+		break;
+	default:
+		return -EINVAL;
+	}
+
+	if (!bd_attr || !bd)
+		return -EINVAL;
+
+	tmpbd = (u32 *)((char *)bd + bd_attr->addr.length.regoff);
+	*tmpbd |= aie_get_field_val(&bd_attr->addr.length, len);
+
+	return 0;
+}
+
+/**
+ * aie_part_set_dmabuf_bd_kernel() - Set AI engine SHIM DMA buffer descriptor
+ * @apart: AI engine partition
+ * @args: user AI engine dmabuf argument
+ *
+ * @return: 0 for success, negative value for failure
+ *
+ * This function set the user specified buffer descriptor into the SHIM DMA
+ * buffer descriptor. The structure should contain no userspace pointers
+ */
+int aie_part_set_dmabuf_bd_kernel(struct aie_partition *apart,
+				  struct aie_dmabuf_bd_args *args)
+{
+	const struct aie_dma_attr *shim_dma = apart->adev->shim_dma;
+	u32 *bd, *tmpbd, len, laddr, haddr, regval;
+	dma_addr_t addr;
+	int ret;
+
+	ret = aie_part_validate_bdloc(apart, args->loc, args->bd_id);
+	if (ret) {
+		dev_err(&apart->dev, "invalid SHIM DMA BD reg address.\n");
+		return -EINVAL;
+	}
+
+	bd = args->bd;
+	if (!bd)
+		return -EINVAL;
+
+	regval = bd[shim_dma->buflen.regoff / sizeof(u32)];
+	len = aie_get_reg_field(&shim_dma->buflen, regval);
+	if (!len) {
+		dev_err(&apart->dev, "no buf length from shim dma bd.\n");
+		return -EINVAL;
+	}
+
+	/* Get device address from virtual address */
+	addr = aie_part_get_dmabuf_da_from_off(apart, args->buf_fd, 0, len);
+	if (!addr) {
+		dev_err(&apart->dev, "invalid buffer 0x%llx, 0x%x.\n",
+			addr, len);
+		return -EINVAL;
+	}
+
+	/* Set low 32bit address */
+	laddr = lower_32_bits(addr);
+	tmpbd = (u32 *)((char *)bd + shim_dma->laddr.regoff);
+	*tmpbd &= ~shim_dma->laddr.mask;
+	*tmpbd |= aie_get_field_val(&shim_dma->laddr, laddr);
+
+	/* Set high 32bit address */
+	haddr = upper_32_bits(addr);
+	tmpbd = (u32 *)((char *)bd + shim_dma->haddr.regoff);
+	*tmpbd &= ~shim_dma->haddr.mask;
+	*tmpbd |= aie_get_field_val(&shim_dma->haddr, haddr);
+
+	ret = aie_part_set_shimdma_bd(apart, args->loc, args->bd_id, bd);
+	if (ret)
+		dev_err(&apart->dev, "failed to set to shim dma bd.\n");
+
+	return ret;
 }
 
 /**

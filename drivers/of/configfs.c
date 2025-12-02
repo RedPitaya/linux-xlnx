@@ -43,8 +43,6 @@ struct cfs_overlay_item {
 	void			*mem;
 };
 
-static DEFINE_MUTEX(overlay_lock);
-
 static int create_overlay(struct cfs_overlay_item *overlay, void *blob)
 {
 	int err;
@@ -131,7 +129,7 @@ static struct configfs_attribute *cfs_overlay_attrs[] = {
 	NULL,
 };
 
-ssize_t cfs_overlay_item_dtbo_read(struct config_item *item,
+static ssize_t cfs_overlay_item_dtbo_read(struct config_item *item,
 				   void *buf, size_t max_count)
 {
 	struct cfs_overlay_item *overlay = to_cfs_overlay_item(item);
@@ -153,7 +151,7 @@ ssize_t cfs_overlay_item_dtbo_read(struct config_item *item,
 	return overlay->dtbo_size;
 }
 
-ssize_t cfs_overlay_item_dtbo_write(struct config_item *item,
+static ssize_t cfs_overlay_item_dtbo_write(struct config_item *item,
 				    const void *buf, size_t count)
 {
 	struct cfs_overlay_item *overlay = to_cfs_overlay_item(item);

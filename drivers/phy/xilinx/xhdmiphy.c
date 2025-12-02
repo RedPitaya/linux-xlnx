@@ -16,6 +16,7 @@
 #include <linux/phy/phy.h>
 #include <linux/phy/phy-hdmi.h>
 #include <linux/platform_device.h>
+#include <linux/of_platform.h>
 #include <linux/delay.h>
 #include "xhdmiphy.h"
 
@@ -260,7 +261,7 @@ static const struct phy_ops xhdmiphy_phyops = {
 };
 
 static struct phy *xhdmiphy_xlate(struct device *dev,
-				  struct of_phandle_args *args)
+				  const struct of_phandle_args *args)
 {
 	struct xhdmiphy_dev *priv = dev_get_drvdata(dev);
 	struct xhdmiphy_lane *hdmiphy_lane = NULL;
@@ -649,7 +650,7 @@ static int xhdmiphy_parse_of(struct xhdmiphy_dev *priv)
 		val = XHDMIPHY_MMCM;
 	}
 
-	if (val != XHDMIPHY_MMCM && val != XHDMIPHY_PLL) {
+	if (val != XHDMIPHY_MMCM && val != XHDMIPHY_PLL && val != XHDMIPHY_DPLL) {
 		dev_err(priv->dev, "dt xlnx,rx-clk-primitive %d is invalid\n",
 			val);
 		return -EINVAL;
@@ -663,7 +664,7 @@ static int xhdmiphy_parse_of(struct xhdmiphy_dev *priv)
 		val = XHDMIPHY_MMCM;
 	}
 
-	if (val != XHDMIPHY_MMCM && val != XHDMIPHY_PLL) {
+	if (val != XHDMIPHY_MMCM && val != XHDMIPHY_PLL && val != XHDMIPHY_DPLL) {
 		dev_err(priv->dev, "dt xlnx,tx-clk-primitive %d is invalid\n",
 			val);
 		return -EINVAL;
@@ -944,15 +945,13 @@ err_clk:
 	return ret;
 }
 
-static int xhdmiphy_remove(struct platform_device *pdev)
+static void xhdmiphy_remove(struct platform_device *pdev)
 {
 	struct xhdmiphy_dev *priv = platform_get_drvdata(pdev);
 
 	clk_disable_unprepare(priv->dru_clk);
 	clk_disable_unprepare(priv->tmds_clk);
 	clk_disable_unprepare(priv->axi_lite_clk);
-
-	return 0;
 }
 
 static struct platform_driver xhdmiphy_driver = {

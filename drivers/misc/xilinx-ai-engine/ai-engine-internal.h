@@ -3,6 +3,7 @@
  * Xilinx AI Engine driver internal header
  *
  * Copyright (C) 2020 - 2021 Xilinx, Inc.
+ * Copyright (C) 2024 - 2025 Advanced Micro Devices, Inc.
  */
 
 #ifndef AIE_INTERNAL_H
@@ -22,11 +23,13 @@
 #include <linux/mutex.h>
 #include <linux/of.h>
 #include <linux/of_device.h>
+#include <linux/platform_device.h>
 #include <linux/slab.h>
 #include <uapi/linux/xlnx-ai-engine.h>
 
 #define AIE_DEVICE_GEN_AIE	1U
 #define AIE_DEVICE_GEN_AIEML	2U
+#define AIE_DEVICE_GEN_AIE2PS	5U
 
 /*
  * Macros for AI engine tile type bitmasks
@@ -79,14 +82,18 @@ enum aie_tile_type {
 /* Number of event status registers */
 #define AIE_NUM_EVENT_STS_CORETILE	4U
 #define AIE_NUM_EVENT_STS_MEMTILE	6U
-#define AIE_NUM_EVENT_STS_SHIMTILE	4U
+#define AIE_NUM_EVENT_STS_SHIMTILE	8U
 
 /* Number of DMA channels */
 #define AIE_MAX_MM2S_CH		6U
 #define AIE_MAX_S2MM_CH		6U
 
+/* DMA directions */
+#define AIE_S2MM_DIR		0U
+#define AIE_MM2S_DIR		1U
+
 /* Max size of DMA buffer descriptors */
-#define AIE_MAX_BD_SIZE		8U
+#define AIE_MAX_BD_SIZE		9U
 
 /* Program memory offset and size index */
 #define AIE_PM_MEM_OFFSET_IDX	1U
@@ -217,6 +224,31 @@ enum aie_tile_type {
 	.write_callback	= aie_tile_write_cb_##_name,		\
 }
 
+#define AIE_NPI_NUM_IRQS		3U
+#define AIE_USER_EVENT1_NUM_IRQ		(AIE_NPI_NUM_IRQS - 1)
+
+/*
+ * enum aie_uc_mem_type - identifies the type of UC memory
+ */
+enum aie_uc_mem_type {
+	AIE_UC_PROGRAM_MEM,
+	AIE_UC_PRIVATE_DATA_MEM,
+	AIE_UC_SHARED_DATA_MEM,
+	AIE_UC_MEM_MAX
+};
+
+/*
+ * Macro for AI engine memory type.
+ * To access the uc memories in partition memory,
+ * AIE_MEM_MAX can be added to the uc mem type.
+ */
+enum aie_memory_type {
+	AIE_TILE_DATA_MEM,
+	AIE_TILE_PROG_MEM,
+	AIE_MEMTILE_DATA_MEM,
+	AIE_MEM_MAX
+};
+
 /*
  * enum aie_shim_switch_type - identifies different switches in shim tile.
  */
@@ -224,6 +256,15 @@ enum aie_shim_switch_type {
 	AIE_SHIM_SWITCH_A,
 	AIE_SHIM_SWITCH_B
 };
+
+#define AIE_EVENT_BROADCAST_SOUTH	BIT(0)
+#define AIE_EVENT_BROADCAST_WEST	BIT(1)
+#define AIE_EVENT_BROADCAST_NORTH	BIT(2)
+#define AIE_EVENT_BROADCAST_EAST	BIT(3)
+#define AIE_EVENT_BROADCAST_ALL		(AIE_EVENT_BROADCAST_SOUTH	| \
+					 AIE_EVENT_BROADCAST_WEST	| \
+					 AIE_EVENT_BROADCAST_NORTH	| \
+					 AIE_EVENT_BROADCAST_EAST)
 
 /*
  * enum for SSIT devices
@@ -300,6 +341,16 @@ struct aie_dma_mem {
 	struct aie_part_mem pmem;
 	dma_addr_t dma_addr;
 	struct list_head node;
+};
+
+/**
+ * struct aie_uc_corectrl_attr - AI engine uc module core control attribute
+ * @wakeup: wakeup field attribute.
+ * @sleep: sleep field attribute.
+ */
+struct aie_uc_corectrl_attr {
+	struct aie_single_reg_field wakeup;
+	struct aie_single_reg_field sleep;
 };
 
 /**
@@ -424,12 +475,14 @@ struct aie_bd_aieml_dim_attr {
  * @use_next: buffer descriptor use next bd field attributes
  * @addr: buffer descriptor address attributes
  * @addr_2: buffer descriptor address attributes of second address
+ * @addr_3: buffer descriptor address attributes of extended address
  * @lock: buffer descriptor lock attributes
  * @lock_2: buffer descriptor lock attributes of second lock
  * @packet: buffer descriptor packet attributes
  * @axi: buffer descriptor AXI attributes
  * @aie_dim: buffer descriptor dimension attributes for aie dma
  * @aieml_dim: buffer descriptor dimension attributes for aieml dma
+ * @aie2ps_dim: buffer descriptor dimension attributes for aie2ps dma
  * @buf_sel: buffer descriptor buffer selection field attributes
  * @curr_ptr: buffer descriptor current pointer field attributes
  * @interleave_en: buffer descriptor interleave enable field attributes
@@ -448,6 +501,7 @@ struct aie_bd_attr {
 	struct aie_single_reg_field use_next;
 	struct aie_bd_addr_attr addr;
 	struct aie_bd_addr_attr addr_2;
+	struct aie_bd_addr_attr addr_3;
 	struct aie_bd_lock_attr lock;
 	struct aie_bd_lock_attr lock_2;
 	struct aie_bd_pkt_attr packet;
@@ -455,6 +509,7 @@ struct aie_bd_attr {
 	union {
 		struct aie_bd_aie_dim_attr aie_dim;
 		struct aie_bd_aieml_dim_attr aieml_dim;
+		struct aie_bd_aieml_dim_attr aie2ps_dim;
 	};
 	struct aie_single_reg_field buf_sel;
 	struct aie_single_reg_field curr_ptr;
@@ -481,6 +536,7 @@ struct aie_bd_attr {
  * @curbd: current buffer descriptor field attributes
  * @qsts: queue status field attributes
  * @fifo_cnt: FIFO counter field attributes
+ * @taskq_bd: DMA channel task queue start bd attributes
  * @bd_regoff: SHIM DMA buffer descriptors register offset
  * @mm2s_sts_regoff: MM2S status register offset
  * @s2mm_sts_regoff: S2MM status register offset
@@ -489,6 +545,9 @@ struct aie_bd_attr {
  * @num_s2mm_chan: number of S2MM channels
  * @num_bds: number of buffer descriptors
  * @bd_len: length of a buffer descriptor in bytes
+ * @num_bd_regs: number of buffer descriptor registers
+ * @chan_idx_offset: dma channel ID index offset in bytes
+ * @chan_dir_offset: dma channel direction index offset in bytes
  */
 struct aie_dma_attr {
 	struct aie_single_reg_field laddr;
@@ -501,6 +560,7 @@ struct aie_dma_attr {
 	struct aie_single_reg_field curbd;
 	struct aie_single_reg_field qsts;
 	struct aie_single_reg_field fifo_cnt;
+	struct aie_single_reg_field taskq_bd;
 	u32 bd_regoff;
 	u32 mm2s_sts_regoff;
 	u32 s2mm_sts_regoff;
@@ -509,6 +569,57 @@ struct aie_dma_attr {
 	u32 num_s2mm_chan;
 	u32 num_bds;
 	u32 bd_len;
+	u32 num_bd_regs;
+	u32 chan_idx_offset;
+	u32 chan_dir_offset;
+};
+
+/*
+ * enum aie_strmsw_port_type - identifies the type of stream switch port
+ */
+enum aie_strmsw_port_type {
+	AIE_STRMSW_CORE,
+	AIE_STRMSW_DMA,
+	AIE_STRMSW_CTRL,
+	AIE_STRMSW_FIFO,
+	AIE_STRMSW_SOUTH,
+	AIE_STRMSW_WEST,
+	AIE_STRMSW_NORTH,
+	AIE_STRMSW_EAST,
+	AIE_STRMSW_TRACE,
+	AIE_STRMSW_MAX
+};
+
+/**
+ * struct aie_strmsw_port_attr - AI engine stream switch port attributes structure
+ * @num_ports: number of ports
+ * @port_regoff: base address of port
+ */
+struct aie_strmsw_port_attr {
+	u32 num_ports;
+	u32 port_regoff;
+};
+
+/**
+ * struct aie_strmsw_attr - AI engine stream switch attributes structure
+ * @mstr_en: master port enable address field attributes
+ * @config: master port configuration address field attributes
+ * @mstr_ports: port attributes for all master port types
+ * @slv_en: slave port enable address field attributes
+ * @slv_ports: port attributes for all slave port types
+ * @slv_config_base: base register address for slave port configurations
+ * @mux_ports: port attributes for input stream mux
+ * @demux_ports: port attributes for output stream demux
+ */
+struct aie_strmsw_attr {
+	struct aie_single_reg_field mstr_en;
+	struct aie_single_reg_field config;
+	const struct aie_strmsw_port_attr *mstr_ports;
+	struct aie_single_reg_field slv_en;
+	const struct aie_strmsw_port_attr *slv_ports;
+	u32 slv_config_base;
+	const struct aie_single_reg_field *mux_ports;
+	const struct aie_single_reg_field *demux_ports;
 };
 
 struct aie_aperture;
@@ -538,12 +649,28 @@ struct aie_aperture;
  *		     caller to apply partition lock before calling this
  *		     function. The caller function will need to set the bitmap
  *		     on which tiles are required to be clocked on.
+ * @set_column_clock: Enable or disable column clock.
  * @set_tile_isolation: set tile isolation boundary for input direction.
  * @mem_clear: clear data memory banks of the partition.
  * @get_dma_s2mm_status: get dma s2mm status
  * @get_dma_mm2s_status: get dma mm2s status
  * @get_chan_status: get dma channel status
  * @get_lock_status: get tile, shimdma and memtile lock status
+ * @wake_tile_uc_core_up: wakes shile tile uc core up
+ * @get_uc_core_sts: Retrieve the status of a uc core
+ * @get_uc_core_intr: Retrieve the status of a uc core interrupt
+ * @get_uc_mdm_dbg_sts: Retrieve the status of a uc core mdm debug
+ * @get_uc_dma_dm2mm_sts: Retrieve the status of a uc core dm2mm
+ * @get_uc_dma_mm2dm_sts: Retrieve the status of a uc core mm2dm
+ * @get_uc_mod_aximm: Retrieve the status of a uc core aximm
+ * @get_uc_mod_aximm_out_trans: Retrieve the status of a uc core aximm out transactions
+ * @map_uc_mem: Get uc offset to AI array offset map for mems
+ * @part_init: partition initialize for tiles.
+ * @part_teardown: partition teardown.
+ * @part_clear_context: partition clear context, subset of partition init.
+ * @part_clean: partition clean for tiles.
+ * @part_reset: reset partition.
+ * @strmsw_port_verify: verify stream switch port configuration
  *
  * Different AI engine device version has its own device
  * operation.
@@ -573,6 +700,7 @@ struct aie_tile_operations {
 	int (*init_part_clk_state)(struct aie_partition *apart);
 	int (*scan_part_clocks)(struct aie_partition *apart);
 	int (*set_part_clocks)(struct aie_partition *apart);
+	int (*set_column_clock)(struct aie_partition *apart, struct aie_column_args *args);
 	int (*set_tile_isolation)(struct aie_partition *apart,
 				  struct aie_location *loc, u8 dir);
 	int (*mem_clear)(struct aie_partition *apart);
@@ -588,6 +716,31 @@ struct aie_tile_operations {
 	u32 (*get_lock_status)(struct aie_partition *apart,
 			       struct aie_location *loc,
 			       u8 lock);
+	int (*wake_tile_uc_core_up)(struct aie_partition *apart,
+				    struct aie_location *loc);
+	u32 (*get_uc_core_sts)(struct aie_partition *apart,
+			       struct aie_location *loc);
+	u32 (*get_uc_core_intr)(struct aie_partition *apart,
+				struct aie_location *loc);
+	u32 (*get_uc_mdm_dbg_sts)(struct aie_partition *apart,
+				  struct aie_location *loc);
+	u32 (*get_uc_dma_dm2mm_sts)(struct aie_partition *apart,
+				    struct aie_location *loc);
+	u32 (*get_uc_dma_mm2dm_sts)(struct aie_partition *apart,
+				    struct aie_location *loc);
+	u32 (*get_uc_mod_aximm)(struct aie_partition *apart,
+				struct aie_location *loc);
+	u32 (*get_uc_mod_aximm_out_trans)(struct aie_partition *apart,
+					  struct aie_location *loc);
+	int (*map_uc_mem)(struct aie_partition *apart, u64 addr, struct aie_part_mem *pmem);
+	int (*part_init)(struct aie_partition *apart, struct aie_partition_init_args *args);
+	int (*part_teardown)(struct aie_partition *apart);
+	int (*part_clear_context)(struct aie_partition *apart);
+	int (*part_clean)(struct aie_partition *apart);
+	int (*part_reset)(struct aie_partition *apart);
+	int (*strmsw_port_verify)(u8 ttype,
+				  enum aie_strmsw_port_type slv, u8 slv_port_num,
+				  enum aie_strmsw_port_type mstr, u8 mstr_port_num);
 };
 
 /**
@@ -600,46 +753,115 @@ struct aie_resource {
 	u32 total;
 };
 
+struct aie_event_bc_block {
+	u32 south_set;
+	u32 south_clr;
+	u32 south_value;
+	u32 reserved0;
+	u32 west_set;
+	u32 west_clr;
+	u32 west_value;
+	u32 reserved1;
+	u32 north_set;
+	u32 north_clr;
+	u32 north_value;
+	u32 reserved2;
+	u32 east_set;
+	u32 east_clr;
+	u32 east_value;
+};
+
 /**
  * struct aie_event_attr - AI Engine event attributes structure.
  * @bc_event: broadcast event attribute to capture event mask value and
  *	      register offset from @bc_regoff.
  * @group_error: group error attribute to capture error group mask value and
  *		 register offset value from @group_regoff.
+ * @bc_block_a: broadcast block a south-set register offset.
+ * @bc_block_b: broadcast block b south-set register offset.
+ * @error_halt_event: error halt event register offset.
+ * @error_halt_event_group: default value of error halt event group.
+ * @event_group_error0_enable: group_error0 register offset.
+ * @event_group_error0_enable_default: default event0 group enabled mask.
  * @bc_regoff: base broadcast register offset.
  * @status_regoff: base status register offset.
  * @group_regoff: base group error register offset.
  * @base_error_event: event ID of first error event in a group error.
  * @num_broadcasts: total number of broadcast events.
  * @base_bc_event: broadcast 0 vent ID
+ * @base_error_group: First event ID of @base_bc_event event group.
+ * @user_event1: USER_EVENT1 event id.
+ * @uc_error_group: event ID of Uc error group.
  * @num_events: total number of events.
  */
 struct aie_event_attr {
 	struct aie_single_reg_field bc_event;
 	struct aie_single_reg_field group_error;
+	struct aie_single_reg_field bc_block_a;
+	struct aie_single_reg_field bc_block_b;
+	struct aie_single_reg_field error_halt_event;
+	u32 error_halt_event_group;
+	struct aie_single_reg_field event_group_error0_enable;
+	u32 event_group_error0_enable_default;
 	u32 bc_regoff;
 	u32 status_regoff;
 	u32 group_regoff;
 	u32 base_error_event;
 	u32 num_broadcasts;
 	u32 base_bc_event;
+	u32 base_error_group;
+	u32 user_event1;
+	u32 uc_error_group;
 	u32 num_events;
 };
 
 /**
  * struct aie_l1_intr_ctrl_attr - AI engine level 1 interrupt controller
  *				  attributes structure.
- * @mask: level 1 interrupt controller mask attribute.
+ * @mask_a: switch A level 1 interrupt controller mask attribute.
+ * @enable_a: switch A level 1 interrupt controller enable attribute.
+ * @disable_a: switch A level 1 interrupt controller disable attribute.
+ * @irq_no_a: switch A level 1 interrupt controller irq_no attribute.
+ * @irq_event_a: switch A level 1 interrupt controller irq_event attribute.
+ * @block_north_a_set: switch A level 1 interrupt controller block_north set attribute.
+ * @block_north_a_clear: switch A level 1 interrupt controller block north clear attribute.
+ * @block_north_a_value: switch A level 1 interrupt controller block north value attribute.
+ * @mask_b: switch B level 1 interrupt controller mask attribute.
+ * @enable_b: switch B level 1 interrupt controller enable attribute.
+ * @disable_b: switch B level 1 interrupt controller disable attribute.
+ * @irq_no_b: switch B level 1 interrupt controller irq_no attribute.
+ * @irq_event_b: switch B level 1 interrupt controller irq_event attribute.
+ * @block_north_b_set: switch B level 1 interrupt controller block_north set attribute.
+ * @block_north_b_clear: switch B level 1 interrupt controller block north clear attribute.
+ * @block_north_b_value: switch B level 1 interrupt controller block north value attribute.
  * @swa_status: switch A level 1 interrupt controller status attribute.
- * @swb_status: switch A level 1 interrupt controller status attribute.
+ * @swb_status: switch B level 1 interrupt controller status attribute.
  * @swa_event: switch A level 1 interrupt controller event attribute.
- * @swb_event: switch A level 1 interrupt controller event attribute.
+ * @swb_event: switch B level 1 interrupt controller event attribute.
  * @regoff: base level 1 interrupt controller register offset.
  * @event_lsb: lsb of IRQ event within IRQ event switch register.
  * @num_broadcasts: total number of broadcast signals to level 1 interrupt
  *		    controller.
  */
 struct aie_l1_intr_ctrl_attr {
+	struct aie_single_reg_field mask_a;
+	struct aie_single_reg_field enable_a;
+	struct aie_single_reg_field disable_a;
+	struct aie_single_reg_field irq_no_a;
+	struct aie_single_reg_field irq_event_a;
+	struct aie_single_reg_field block_north_a_set;
+	struct aie_single_reg_field block_north_a_clear;
+	struct aie_single_reg_field block_north_a_value;
+
+	struct aie_single_reg_field mask_b;
+	struct aie_single_reg_field enable_b;
+	struct aie_single_reg_field disable_b;
+	struct aie_single_reg_field irq_no_b;
+	struct aie_single_reg_field irq_event_b;
+	struct aie_single_reg_field block_north_b_set;
+	struct aie_single_reg_field block_north_b_clear;
+	struct aie_single_reg_field block_north_b_value;
+
 	struct aie_single_reg_field swa_status;
 	struct aie_single_reg_field swb_status;
 	struct aie_single_reg_field swa_event;
@@ -656,6 +878,7 @@ struct aie_l1_intr_ctrl_attr {
  * @enable: level 2 interrupt controller enable attribute.
  * @disable: level 2 interrupt controller disable attribute.
  * @status: level 2 interrupt controller status attribute.
+ * @intr: level 2 interrupt controller interrupt.
  * @regoff: level 2 interrupt controller register offset.
  * @num_broadcasts: total number of broadcast signals to level 2 interrupt
  *		    controller.
@@ -665,6 +888,7 @@ struct aie_l2_intr_ctrl_attr {
 	struct aie_single_reg_field enable;
 	struct aie_single_reg_field disable;
 	struct aie_single_reg_field status;
+	struct aie_single_reg_field intr;
 	u32 regoff;
 	u32 num_broadcasts;
 };
@@ -899,6 +1123,26 @@ struct aie_tile {
 };
 
 /**
+ * struct aie_dma_addrlen - Stores the address and length of the transaction
+ * @dma_addr: dma address array.
+ * @len: length of the data to be transferred.
+ */
+struct aie_dma_addrlen {
+	dma_addr_t dma_addr;
+	size_t len;
+};
+
+/**
+ * struct aie_addrlen - Stores the address and length of the transaction
+ * @addr: load cert src address.
+ * @len: length of the data to be transferred.
+ */
+struct aie_addrlen {
+	void *addr;
+	size_t len;
+};
+
+/**
  * struct aie_device - AI engine device structure
  * @apertures: list of apertures
  * @cdev: cdev for the AI engine
@@ -906,17 +1150,22 @@ struct aie_tile {
  * @mlock: protection for AI engine device operations
  * @clk: AI enigne device clock
  * @kernel_regs: array of kernel only registers
- * @core_regs: array of core registers
  * @core_regs_clr: array of core registers to be cleared
  * @ops: tile operations
  * @col_rst: column reset attribute
  * @col_clkbuf: column clock buffer attribute
+ * @noc_outstanding_aximm: register for outstanding noc aximm
+ * @uc_outstanding_aximm: register for outstanding uc aximm
+ * @shimnoc_uc_corectrl: UC core control attribute
  * @shim_bd: SHIM DMA buffer descriptor attribute
  * @tile_bd: tile DMA buffer descriptor attribute
  * @memtile_bd: MEM tile DMA buffer descriptor attribute
  * @shim_dma: SHIM DMA attribute
  * @tile_dma: tile DMA attribute
  * @memtile_dma: MEM tile DMA attribute
+ * @tile_strmsw: tile stream switch attributes
+ * @memory_strmsw: memtile stream switch attributes
+ * @shim_strmsw: shim stream switch attributes
  * @pl_events: pl module event attribute
  * @memtile_events: memory tile event attribute
  * @mem_events: memory module event attribute
@@ -934,11 +1183,8 @@ struct aie_tile {
  * @col_shift: column address shift
  * @row_shift: row address shift
  * @dev_gen: aie hardware device generation
- * @cols_res: AI engine columns resources to indicate
- *	      while columns are occupied by partitions.
  * @num_kernel_regs: number of kernel only registers range
  * @num_core_regs_clr: number of core registers to clear
- * @pm_node_id: AI Engine platform management node ID
  * @clock_id: AI Engine clock ID
  * @device_name: identify ssit device id
  * @ttype_attr: tile type attributes
@@ -949,8 +1195,7 @@ struct aie_tile {
  * @core_pc: program counter attribute
  * @core_lr: link register attribute
  * @core_sp: stack pointer attribute
- * @dma_status_str: DMA channel status in string format
- * @queue_status_str: DMA queue status in string format
+ * @hw_err_status: hw error status register attribute
  */
 struct aie_device {
 	struct list_head apertures;
@@ -963,12 +1208,18 @@ struct aie_device {
 	const struct aie_tile_operations *ops;
 	const struct aie_single_reg_field *col_rst;
 	const struct aie_single_reg_field *col_clkbuf;
+	const struct aie_single_reg_field *noc_outstanding_aximm;
+	const struct aie_single_reg_field *uc_outstanding_aximm;
+	const struct aie_uc_corectrl_attr *shimnoc_uc_corectrl;
 	const struct aie_bd_attr *shim_bd;
 	const struct aie_bd_attr *tile_bd;
 	const struct aie_bd_attr *memtile_bd;
 	const struct aie_dma_attr *shim_dma;
 	const struct aie_dma_attr *tile_dma;
 	const struct aie_dma_attr *memtile_dma;
+	const struct aie_strmsw_attr *tile_strmsw;
+	const struct aie_strmsw_attr *memory_strmsw;
+	const struct aie_strmsw_attr *shim_strmsw;
 	const struct aie_event_attr *pl_events;
 	const struct aie_event_attr *memtile_events;
 	const struct aie_event_attr *mem_events;
@@ -988,7 +1239,6 @@ struct aie_device {
 	u32 dev_gen;
 	u32 num_kernel_regs;
 	u32 num_core_regs_clr;
-	u32 pm_node_id;
 	u32 clock_id;
 	u32 device_name;
 	struct aie_tile_attr ttype_attr[AIE_TILE_TYPE_MAX];
@@ -999,6 +1249,7 @@ struct aie_device {
 	const struct aie_single_reg_field *core_pc;
 	const struct aie_single_reg_field *core_lr;
 	const struct aie_single_reg_field *core_sp;
+	const struct aie_single_reg_field *hw_err_status;
 };
 
 struct aie_l2_mask {
@@ -1019,7 +1270,7 @@ struct aie_l2_mask {
  *	      while columns are occupied by partitions.
  * @node_id: AI engine aperture node id which is to identify
  *	     the aperture in the system in firmware
- * @irq: Linux IRQ number
+ * @npi_irq: Linux IRQ numbers
  * @range: range of aperture
  * @backtrack: workqueue to backtrack interrupt
  * @l2_mask: level 2 interrupt controller mask bitmap
@@ -1035,11 +1286,104 @@ struct aie_aperture {
 	struct device dev;
 	struct aie_resource cols_res;
 	u32 node_id;
-	int irq;
+	int npi_irq[AIE_NPI_NUM_IRQS];
 	struct aie_range range;
 	struct work_struct backtrack;
 	struct aie_l2_mask l2_mask;
 	struct attribute_group *attr_grp;
+};
+
+struct aie_op_start_num_col {
+	u16 type;         /* Operation Type */
+	u16 len;          /* Operation struct length */
+	u16 start_col;    /* Start Column */
+	u16 num_col;      /* Number of Columns */
+} __aligned(4);
+
+/**
+ * struct aie_op_l2_ctrl_irq - L2 Control IRQ ops
+ * @type: operation type.
+ * @len: length of the op
+ * @irq: irq value to be written to L2start_col: start column
+ */
+struct  aie_op_l2_ctrl_irq {
+	u16 type;         /* Operation Type */
+	u16 len;          /* Operation struct length */
+	u16 irq;          /* Value to be written to the L2 interrupt controller register. */
+} __aligned(4);
+
+struct aie_op_type_len {
+	u16 type;        /* Operation Type */
+	u16 len;         /* Operation struct length */
+} __aligned(4);
+
+struct aie_op_hw_err {
+	u16 type;         /* Operation Type */
+	u16 len;          /* Operation struct length */
+	u16 val;          /* Depends on the operation. Refer the table below for more information.*/
+} __aligned(4);
+
+struct aie_op_uc_zeroisation {
+	u16 type;         /* Operation Type */
+	u16 len;          /* Operation struct length*/
+	u16 flag;         /* Value to be written to the uc zeroization register */
+} __aligned(4);
+
+struct aie_op_handshake {
+	u16 type;         /* Operation Type */
+	u16 len;          /* Operation struct length*/
+	u32 offset;	  /* Handshake region offset */
+	u32 high_addr; /* physical address of the buffer that has handshake data */
+	u32 low_addr;
+} __aligned(4);
+
+struct aie_op_nmu_switch {
+	u16 type;      /* Operation Type */
+	u16 len;       /* Operation struct length */
+	u16 c0_route;  /* Value to be written to column 0 nmu switch register */
+	u16 c1_route;  /* Value to be written to column 1 nmu switch register */
+} __aligned(4);
+
+struct aie_op_aximm_isolation {
+	u16 type;      /* Operation Type */
+	u16 len;       /* Operation struct length */
+	u16 traffic;   /* Value to be written to the aximm isolation register */
+} __aligned(4);
+
+struct aie_op_ecc_scrub_period {
+	u16 type; /* Operation Type */
+	u16 len; /* Operation struct length */
+	u16 scrub_period; /* Value to be written to the ecc scrub period register */
+} __aligned(4);
+
+struct aie_op_tlast {
+	u16 type; /* Operation Type */
+	u16 len; /* Operation struct length */
+	u16 state; /* Value to be written to the error on tlast bit to enable/disable */
+} __aligned(4);
+
+/**
+ * struct aie_pm_ops - AI engine plm calls struct.
+ * @pkt_va: pm ops data virtual address.
+ * @pkt_dma: pm ops data dma address.
+ * @size: size of pkt_va.
+ * @offset: offset within pkt_va;
+ * @op_range: pointer to pkt_va for latest range. All op headers added at offset will be for this
+ *	      range.
+ */
+struct aie_pm_ops {
+	void *pkt_va;
+	dma_addr_t pkt_dma;
+	size_t size;
+	size_t offset;
+	struct aie_op_start_num_col *op_range;
+};
+
+struct aie_op_handshake_addr {
+	void *hs_va;
+	size_t size;
+	size_t offset;
+	dma_addr_t hs_dma;
 };
 
 /**
@@ -1065,11 +1409,14 @@ struct aie_aperture {
  * @mem_event_status: memory module event bitmap
  * @pl_event_status: pl module event bitmap
  * @attr_grp: attribute group
+ * @pm_ops: pm ops pkt and metadata for zynq plm calls
  * @partition_id: partition id. Partition ID is the identifier
  *		  of the AI engine partition in the system.
  * @status: indicate if the partition is in use
  * @cntrflag: partition control flag. e.g. whether to reset columns when
  *	      the partition is released
+ * @user_event1_complete: call back function for inference complete
+ * @user_event1_priv: priv data for user_event1_complete cb
  * @error_to_report: indicates if there are errors pending to be reported to
  *		     the application. This value is set to true if errors are
  *		     found during backtracking, and error interrupt was
@@ -1097,9 +1444,12 @@ struct aie_partition {
 	struct aie_resource mem_event_status;
 	struct aie_resource pl_event_status;
 	struct attribute_group *attr_grp;
+	struct aie_pm_ops pm_ops;
 	u32 partition_id;
 	u32 status;
 	u32 cntrflag;
+	void (*user_event1_complete)(__u32 partition_id, void *user_event1_priv);
+	void *user_event1_priv;
 	u8 error_to_report;
 };
 
@@ -1235,6 +1585,22 @@ static inline int aie_validate_location(struct aie_partition *apart,
 	return 0;
 }
 
+static inline int aie_get_tile_status_size(struct aie_partition *apart,
+					   struct aie_location *loc)
+{
+	switch (apart->adev->ops->get_tile_type(apart->adev, loc)) {
+	case AIE_TILE_TYPE_MEMORY:
+		return AIE_NUM_EVENT_STS_MEMTILE;
+	case AIE_TILE_TYPE_TILE:
+		return AIE_NUM_EVENT_STS_CORETILE;
+	case AIE_TILE_TYPE_SHIMPL:
+	case AIE_TILE_TYPE_SHIMNOC:
+		return AIE_NUM_EVENT_STS_SHIMTILE;
+	default:
+		return 1;
+	}
+}
+
 /**
  * aie_resource_or_get_valueul() - get unsigned long value of specified
  *				   number of bits starting from specified
@@ -1307,15 +1673,25 @@ void aie_part_remove(struct aie_partition *apart);
 int aie_part_clear_context(struct aie_partition *apart);
 int aie_part_clean(struct aie_partition *apart);
 int aie_part_open(struct aie_partition *apart, void *rsc_metadata);
-int aie_part_initialize(struct aie_partition *apart, void __user *user_args);
+int aie_part_initialize(struct aie_partition *apart, struct aie_partition_init_args *args);
 int aie_part_teardown(struct aie_partition *apart);
 
 int aie_mem_get_info(struct aie_partition *apart, unsigned long arg);
 
 long aie_part_attach_dmabuf_req(struct aie_partition *apart,
 				void __user *user_args);
+long aie_part_attach_dmabuf_fd(struct aie_partition *apart, int dmabuf_fd);
 long aie_part_detach_dmabuf_req(struct aie_partition *apart,
 				void __user *user_args);
+long aie_part_detach_dmabuf_fd(struct aie_partition *apart, int dmabuf_fd);
+int aie_part_push_bd(struct aie_partition *apart, struct aie_location *loc,
+		     u8 bd_id, u8 dir, u8 chan_id);
+int aie_part_set_valid_bd(struct aie_partition *apart, struct aie_location loc,
+			  u32 *bd);
+int aie_part_set_len_bd(struct aie_partition *apart, struct aie_location loc,
+			u32 *bd, size_t len);
+int aie_part_set_dmabuf_bd_kernel(struct aie_partition *apart,
+				  struct aie_dmabuf_bd_args *args);
 long aie_part_set_bd_from_user(struct aie_partition *apart,
 					void __user *user_args);
 long aie_part_set_bd(struct aie_partition *apart,
@@ -1334,6 +1710,7 @@ bool aie_part_check_clk_enable_loc(struct aie_partition *apart,
 				   struct aie_location *loc);
 int aie_part_set_freq(struct aie_partition *apart, u64 freq);
 int aie_part_get_freq(struct aie_partition *apart, u64 *freq);
+int aie_init_freq(struct aie_aperture *aperture);
 
 int aie_part_request_tiles(struct aie_partition *apart, int num_tiles,
 			   struct aie_location *locs);
@@ -1345,6 +1722,7 @@ int aie_part_release_tiles_from_user(struct aie_partition *apart,
 				     void __user *user_args);
 int aie_device_init(struct aie_device *adev);
 int aieml_device_init(struct aie_device *adev);
+int aie2ps_device_init(struct aie_device *adev);
 
 bool aie_part_has_mem_mmapped(struct aie_partition *apart);
 bool aie_part_has_regs_mmapped(struct aie_partition *apart);
@@ -1360,6 +1738,8 @@ struct aie_partition *aie_create_partition(struct aie_aperture *aperture,
 
 void aie_aperture_backtrack(struct work_struct *work);
 irqreturn_t aie_interrupt(int irq, void *data);
+irqreturn_t aie2ps_interrupt_fn(int irq, void *data);
+irqreturn_t aie2ps_interrupt_user_event1(int irq, void *data);
 void aie_interrupt_callback(const u32 *payload, void *data);
 int aie_aperture_create_l2_mask(struct aie_aperture *aperture);
 bool aie_part_has_error(struct aie_partition *apart);
@@ -1412,6 +1792,27 @@ ssize_t aie_sysfs_read_handler(struct file *filp, struct kobject *kobj,
 			       struct bin_attribute *attr, char *buf,
 			       loff_t offset, size_t max_size);
 
+ssize_t aie2ps_sysfs_get_uc_core_status(struct aie_partition *apart,
+					struct aie_location *loc, char *buffer,
+					ssize_t size);
+ssize_t aie2ps_sysfs_get_uc_core_intr(struct aie_partition *apart,
+				      struct aie_location *loc, char *buffer,
+				      ssize_t size);
+ssize_t aie2ps_sysfs_get_uc_mdm_dbg_sts(struct aie_partition *apart,
+					struct aie_location *loc, char *buffer,
+					ssize_t size);
+ssize_t aie2ps_sysfs_get_uc_dma_dm2mm_sts(struct aie_partition *apart,
+					  struct aie_location *loc, char *buffer,
+					  ssize_t size);
+ssize_t aie2ps_sysfs_get_uc_dma_mm2dm_sts(struct aie_partition *apart,
+					  struct aie_location *loc, char *buffer,
+					  ssize_t size);
+ssize_t aie2ps_sysfs_get_uc_mod_aximm(struct aie_partition *apart,
+				      struct aie_location *loc, char *buffer,
+				      ssize_t size);
+ssize_t aie2ps_sysfs_get_uc_mod_aximm_out_trans(struct aie_partition *apart,
+						struct aie_location *loc, char *buffer,
+						ssize_t size);
 ssize_t aie_sysfs_get_core_status(struct aie_partition *apart,
 				  struct aie_location *loc, char *buffer,
 				  ssize_t size);
@@ -1460,12 +1861,15 @@ ssize_t aie_tile_show_event(struct device *dev, struct device_attribute *attr,
 void aie_read_event_status(struct aie_partition *apart,
 			   struct aie_location *loc,
 			   enum aie_module_type module, u32 *reg);
+ssize_t aie_part_read_cb_ucstatus(struct kobject *kobj, char *buffer,
+				  ssize_t size);
 ssize_t aie_part_read_cb_status(struct kobject *kobj, char *buffer,
 				ssize_t size);
 long aie_part_rscmgr_get_statistics(struct aie_partition *apart,
 				    void __user *user_args);
-int  aie_part_set_column_clock_from_user(struct aie_partition *apart,
-					 void __user *user_args);
+int aie_part_set_column_clock_from_user(struct aie_partition *apart, struct aie_column_args *args);
+int aie2ps_part_set_column_clock_from_user(struct aie_partition *apart,
+					   struct aie_column_args *args);
 
 int aie_overlay_register_notifier(void);
 void aie_overlay_unregister_notifier(void);
@@ -1476,10 +1880,36 @@ u32 aie_get_core_lr(struct aie_partition *apart,
 u32 aie_get_core_sp(struct aie_partition *apart,
 		    struct aie_location *loc);
 int aie_dma_mem_alloc(struct aie_partition *apart, __kernel_size_t size);
+void *aie_dma_mem_alloc_buffer(struct aie_partition *apart, size_t bufsize,
+			       int *dmabuf_fd);
 int aie_dma_mem_free(int fd);
+void aie_dma_mem_free_buffer(struct aie_partition *apart, int dmabuf_fd);
 int aie_dma_begin_cpu_access(struct dma_buf *dmabuf,
 			     enum dma_data_direction direction);
 int aie_dma_end_cpu_access(struct dma_buf *dmabuf,
 			   enum dma_data_direction direction);
+int aie_part_pm_ops_create(struct aie_partition *apart);
 
+int aie_part_pm_ops(struct aie_partition *apart, void *data, u32 type, struct aie_range range,
+		    bool flush);
+int aie_part_pm_ops_flush(struct aie_partition *apart);
+int aie2ps_part_initialize(struct aie_partition *apart, struct aie_partition_init_args *args);
+int aie2ps_part_teardown(struct aie_partition *apart);
+int aie2ps_part_clear_context(struct aie_partition *apart);
+int aie2ps_part_clean(struct aie_partition *apart);
+int aie2ps_part_reset(struct aie_partition *apart);
+int aie_part_maskpoll_register(struct aie_partition *apart, u32 offset, u32 data, u32 mask,
+			       u32 timeout);
+int aie_partition_uc_zeroize_mem(struct device *dev, struct aie_location *loc, u32 regval);
+int aie_error_handling_init(struct aie_partition *apart);
+int aie2ps_part_write_handshake(struct aie_partition *apart,
+				struct aie_op_handshake_data *data,
+				uint32_t handshake_cols);
+int aie_part_set_strmsw_cct(struct aie_partition *apart, struct aie_location *loc,
+			    enum aie_strmsw_port_type slv, u8 slv_port_num,
+			    enum aie_strmsw_port_type mstr, u8 mstr_port_num);
+int aie_part_enable_noc_to_aie(struct aie_partition *apart,
+			       struct aie_location *loc, u8 port_num);
+int aie_part_enable_aie_to_noc(struct aie_partition *apart,
+			       struct aie_location *loc, u8 port_num);
 #endif /* AIE_INTERNAL_H */

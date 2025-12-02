@@ -172,8 +172,7 @@ static struct skcipher_alg zynqmp_alg = {
 
 static struct xlnx_feature rsa_feature_map[] = {
 	{
-		.family = ZYNQMP_FAMILY_CODE,
-		.subfamily = ALL_SUB_FAMILY_CODE,
+		.family = PM_ZYNQMP_FAMILY_CODE,
 		.feature_id = PM_SECURE_RSA,
 		.data = &zynqmp_alg,
 	},
@@ -195,6 +194,7 @@ static int zynqmp_rsa_probe(struct platform_device *pdev)
 		return PTR_ERR(rsa_dd->alg);
 	}
 
+	dev_warn(dev, "This driver is deprecated. Please migrate to xilinx-rsa driver\n");
 	rsa_dd->dev = dev;
 	platform_set_drvdata(pdev, rsa_dd);
 
@@ -223,15 +223,13 @@ err_algs:
 	return ret;
 }
 
-static int zynqmp_rsa_remove(struct platform_device *pdev)
+static void zynqmp_rsa_remove(struct platform_device *pdev)
 {
 	struct zynqmp_rsa_dev *drv_ctx;
 
 	drv_ctx = platform_get_drvdata(pdev);
 
 	crypto_unregister_skcipher(drv_ctx->alg);
-
-	return 0;
 }
 
 static struct platform_driver xilinx_rsa_driver = {

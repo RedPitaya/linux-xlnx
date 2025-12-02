@@ -117,7 +117,6 @@ static int aie_mem_mmap(struct dma_buf *dmabuf, struct vm_area_struct *vma)
 			     rloc.row++) {
 				unsigned long toffset, len;
 				phys_addr_t mempa;
-				int ret;
 
 				remainder = vma->vm_end - addr;
 				if (!remainder)
@@ -311,7 +310,6 @@ int aie_dma_mem_free(int fd)
 	struct aie_dma_mem *dma_mem;
 	struct aie_part_mem *pmem;
 	struct dma_buf *dmabuf;
-	int ret;
 
 	dmabuf = dma_buf_get(fd);
 	if (IS_ERR(dmabuf))
@@ -330,12 +328,8 @@ int aie_dma_mem_free(int fd)
 	dma_free_coherent(&apart->dev, pmem->mem.size,
 			  (void *)pmem->mem.offset, dma_mem->dma_addr);
 
-	ret = mutex_lock_interruptible(&apart->mlock);
-	if (ret)
-		return ret;
-
+	mutex_lock(&apart->mlock);
 	list_del(&dma_mem->node);
-
 	mutex_unlock(&apart->mlock);
 	/*
 	 * dma_buf_put reduces the reference count increased during allocation.
@@ -343,6 +337,76 @@ int aie_dma_mem_free(int fd)
 	dma_buf_put(dmabuf);
 
 	return 0;
+}
+
+/**
+ * aie_dma_mem_alloc_buffer() - Allocates dma memory, creates dmabuf, attaches
+ *				dmabuf to ai-engine partition and returns
+ *				virtual address of the buffer and dmabuf file
+ *				descriptor.
+ * @apart: AI Engine partition instance
+ * @bufsize: buffer size
+ * @dmabuf_fd: where dmabuf file descriptor is stored
+ * @return: virtual address for buffer error pointer for failure
+ */
+void *aie_dma_mem_alloc_buffer(struct aie_partition *apart, size_t bufsize,
+			       int *dmabuf_fd)
+{
+	struct aie_part_mem *pmem;
+	struct dma_buf *dbuf;
+	int ret, fd;
+
+	if (!apart || !dmabuf_fd || bufsize == 0) {
+		dev_err(&apart->dev, "Invalid arguments");
+		return ERR_PTR(-EINVAL);
+	}
+
+	fd = aie_dma_mem_alloc(apart, bufsize);
+	if (fd < 0) {
+		dev_err(&apart->dev, "Failed to allocate dma memory");
+		return ERR_PTR(fd);
+	}
+	*dmabuf_fd = fd;
+
+	ret = aie_part_attach_dmabuf_fd(apart, fd);
+	if (ret < 0) {
+		aie_dma_mem_free(fd);
+		return ERR_PTR(ret);
+	}
+
+	dbuf = dma_buf_get(fd);
+	if (IS_ERR(dbuf)) {
+		ret = PTR_ERR(dbuf);
+		goto err;
+	}
+
+	pmem = (struct aie_part_mem *)dbuf->priv;
+	if (!pmem) {
+		dev_err(&apart->dev, "Failed to get partition memory instance");
+		ret = -EINVAL;
+		goto err;
+	}
+
+	dma_buf_put(dbuf);
+	return (void *)pmem->mem.offset;
+err:
+	dma_buf_put(dbuf);
+	aie_part_detach_dmabuf_fd(apart, fd);
+	aie_dma_mem_free(fd);
+	return ERR_PTR(ret);
+}
+
+/**
+ * aie_dma_mem_free_buffer() - Called to free buffer created with
+ *			       aie_dma_mem_alloc_buffer(). Will detach the
+ *			       dmabuf and then free dma memory.
+ * @apart: AI Engine partition instance
+ * @dmabuf_fd: dmabuf file descriptor returned by aie_dma_mem_alloc_buffer()
+ */
+void aie_dma_mem_free_buffer(struct aie_partition *apart, int dmabuf_fd)
+{
+	aie_part_detach_dmabuf_fd(apart, dmabuf_fd);
+	aie_dma_mem_free(dmabuf_fd);
 }
 
 /**

@@ -3,14 +3,12 @@
  * xlnx-ai-engine.h - Xilinx AI engine external interface
  *
  * Copyright (c) 2020, Xilinx Inc.
+ * Copyright (C) 2024 - 2025 Advanced Micro Devices, Inc.
  */
 
 #ifndef _XLNX_AI_ENGINE_H_
 #define _XLNX_AI_ENGINE_H_
 
-#if !IS_ENABLED(CONFIG_XILINX_AIE)
-#include <linux/errno.h>
-#endif
 #include <uapi/linux/xlnx-ai-engine.h>
 
 /*
@@ -66,6 +64,15 @@ struct aie_tile_info {
 	u16 mem_events;
 	u16 shim_events;
 	u16 padding;
+};
+
+/* Data structure to capture the device Information */
+struct aie_device_info {
+	u16 cols;
+	u16 rows;
+	u16 core_rows;
+	u16 mem_rows;
+	u16 shim_rows;
 };
 
 /* Data structure to capture the dma status */
@@ -127,7 +134,6 @@ struct aie_errors {
 	u32 num_err;
 };
 
-#if IS_ENABLED(CONFIG_XILINX_AIE)
 bool aie_partition_is_available(struct aie_partition_req *req);
 struct device *aie_partition_request(struct aie_partition_req *req);
 int aie_partition_get_fd(struct device *dev);
@@ -153,6 +159,17 @@ int aie_part_rscmgr_set_static_range(struct device *dev,
 
 int aie_get_status_dump(struct device *dev, struct aie_col_status *status);
 int aie_get_tile_info(struct device *dev, struct aie_tile_info *tile_info);
+int aie_get_device_info(struct aie_device_info *device_info);
+int aie_partition_read(struct device *dev, struct aie_location loc,
+		       size_t offset, size_t len, void *data);
+int aie_partition_write(struct device *dev, struct aie_location loc,
+			size_t offset, size_t len, void *data, u32 mask);
+int aie_partition_uc_wakeup(struct device *dev, struct aie_location *loc);
+int aie_partition_initialize(struct device *dev, struct aie_partition_init_args *args);
+int aie_partition_teardown(struct device *dev);
+int aie_partition_handshake_update(struct device *dev,
+				   struct aie_op_handshake_data *handshake,
+				   uint32_t handshake_cols);
 /**
  * aie_get_error_category() - Get the category of an AIE error
  * @err: AI engine hardware error
@@ -163,105 +180,12 @@ static inline u32 aie_get_error_category(struct aie_error *err)
 	return err->category;
 }
 
-#else
-static inline bool aie_partition_is_available(struct aie_partition_req *req)
-{
-	return false;
-}
+int aie_partition_write_privileged_mem(struct device *dev, size_t offset, size_t len, void *data);
+int aie_partition_read_privileged_mem(struct device *dev, size_t offset, size_t len, void *data);
+bool aie_partition_check_noc_aximm(struct device *dev, struct aie_location *loc);
+int aie_partition_check_uc_aximm(struct device *dev, struct aie_location *loc);
+int aie_partition_uc_zeroize_mem(struct device *dev, struct aie_location *loc, u32 regval);
+int aie_load_cert(struct device *dev, unsigned char *elf_addr);
+int aie_load_cert_broadcast(struct device *dev, void *elf_addr);
 
-static inline struct device *
-aie_partition_request(struct aie_partition_req *req)
-{
-	return NULL;
-}
-
-static inline int aie_partition_get_fd(struct device *dev)
-{
-	return -EINVAL;
-}
-
-static inline void aie_partition_release(struct device *dev) {}
-
-static inline int aie_partition_reset(struct device *dev)
-{
-	return -EINVAL;
-}
-
-static inline int aie_partition_post_reinit(struct device *dev)
-{
-	return -EINVAL;
-}
-
-static inline int
-aie_register_error_notification(struct device *dev, void (*cb)(void *priv),
-				void *priv)
-{
-	return -EINVAL;
-}
-
-static inline int aie_unregister_error_notification(struct device *dev)
-{
-	return -EINVAL;
-}
-
-static inline struct aie_errors *aie_get_errors(struct device *dev)
-{
-	return NULL;
-}
-
-static inline u32 aie_get_error_categories(struct aie_errors *aie_errs)
-{
-	return 0;
-}
-
-static inline const char *aie_get_error_string(struct aie_errors *aie_errs,
-					       struct aie_error *aie_err)
-{
-	return NULL;
-}
-
-static inline int aie_flush_errors(struct device *dev)
-{
-	return -EINVAL;
-}
-
-static inline void aie_free_errors(struct aie_errors *aie_errs) {}
-
-static inline u32 aie_get_error_category(struct aie_error *err)
-{
-	return 0;
-}
-
-static inline int aie_partition_set_freq_req(struct device *dev, u64 freq)
-{
-	return -EINVAL;
-}
-
-static inline int aie_partition_get_freq(struct device *dev, u64 *freq)
-{
-	return -EINVAL;
-}
-
-static inline int aie_partition_get_freq_req(struct device *dev, u64 *freq)
-{
-	return -EINVAL;
-}
-
-static inline int aie_get_status_dump(struct device *dev, struct aie_col_status *status)
-{
-	return -EINVAL;
-}
-
-static inline int aie_get_tile_info(struct device *dev, struct aie_tile_info *tile_info)
-{
-	return -EINVAL;
-}
-
-static inline int aie_part_rscmgr_set_static_range(struct device *dev,
-						   u8 start_col, u8 num_col, void *meta)
-{
-	return -EINVAL;
-}
-
-#endif /* CONFIG_XILINX_AIE */
 #endif

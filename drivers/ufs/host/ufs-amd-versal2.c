@@ -19,7 +19,12 @@
 #include "ufshcd-pltfrm.h"
 #include "ufshci-dwc.h"
 
-#define VERSAL2_UFS_DEVICE_ID		4
+#define PM_REGNODE_PMC_IOU_SLCR		0x30000002
+#define PM_REGNODE_EFUSE_CACHE		0x30000003
+
+#define SRAM_CSR_OFFSET			0x104C
+#define TXRX_CFGRDY_OFFSET		0x1054
+#define UFS_CAL_1_OFFSET		0xBE8
 
 #define SRAM_CSR_INIT_DONE_MASK		BIT(0)
 #define SRAM_CSR_EXT_LD_DONE_MASK	BIT(1)
@@ -27,6 +32,10 @@
 
 #define MPHY_FAST_RX_AFE_CAL		BIT(2)
 #define MPHY_FW_CALIB_CFG_VAL		BIT(8)
+
+#define MPHY_RX_OVRD_EN			BIT(3)
+#define MPHY_RX_OVRD_VAL		BIT(2)
+#define MPHY_RX_ACK_MASK		BIT(0)
 
 #define TX_RX_CFG_RDY_MASK      GENMASK(3, 0)
 
@@ -38,7 +47,6 @@ struct ufs_versal2_host {
 	struct reset_control *rstphy;
 	u32 phy_mode;
 	unsigned long host_clk;
-	u32 pd_dev_id;
 	u8 attcompval0;
 	u8 attcompval1;
 	u8 ctlecompval0;
@@ -240,7 +248,7 @@ static int ufs_versal2_phy_init(struct ufs_hba *hba)
 	time_left = TIMEOUT_MICROSEC;
 	do {
 		time_left--;
-		ret = versal2_pm_ufs_get_txrx_cfgrdy(host->pd_dev_id, &reg);
+		ret = zynqmp_pm_sec_read_reg(PM_REGNODE_PMC_IOU_SLCR, TXRX_CFGRDY_OFFSET, &reg);
 		if (ret)
 			return ret;
 
@@ -270,7 +278,7 @@ static int ufs_versal2_phy_init(struct ufs_hba *hba)
 	time_left = TIMEOUT_MICROSEC;
 	do {
 		time_left--;
-		ret = versal2_pm_ufs_sram_csr_sel(host->pd_dev_id, PM_UFS_SRAM_CSR_READ, &reg);
+		ret = zynqmp_pm_sec_read_reg(PM_REGNODE_PMC_IOU_SLCR, SRAM_CSR_OFFSET, &reg);
 		if (ret)
 			return ret;
 
@@ -298,6 +306,8 @@ static int ufs_versal2_init(struct ufs_hba *hba)
 	struct ufs_versal2_host *host;
 	struct device *dev = hba->dev;
 	struct ufs_clk_info *clki;
+	int ret;
+	u32 cal;
 
 	host = devm_kzalloc(dev, sizeof(*host), GFP_KERNEL);
 	if (!host)
@@ -313,8 +323,6 @@ static int ufs_versal2_init(struct ufs_hba *hba)
 			host->host_clk = clk_get_rate(clki->clk);
 	}
 
-	host->pd_dev_id = VERSAL2_UFS_DEVICE_ID;
-
 	host->rstc = devm_reset_control_get_exclusive(dev, "ufshc-rst");
 	if (IS_ERR(host->rstc)) {
 		dev_err(dev, "failed to get reset ctrl: ufshc-rst\n");
@@ -327,7 +335,18 @@ static int ufs_versal2_init(struct ufs_hba *hba)
 		return PTR_ERR(host->rstphy);
 	}
 
-	hba->quirks |= UFSHCD_QUIRK_BROKEN_AUTO_HIBERN8;
+	ret = zynqmp_pm_sec_read_reg(PM_REGNODE_EFUSE_CACHE, UFS_CAL_1_OFFSET, &cal);
+	if (ret) {
+		dev_err(dev, "failed to read calibration values\n");
+		return ret;
+	}
+
+	host->attcompval0 = (u8)cal;
+	host->attcompval1 = (u8)(cal >> 8);
+	host->ctlecompval0 = (u8)(cal >> 16);
+	host->ctlecompval1 = (u8)(cal >> 24);
+
+	hba->quirks |= UFSHCD_QUIRK_SKIP_DEF_UNIPRO_TIMEOUT_SETTING;
 
 	return 0;
 }
@@ -354,7 +373,7 @@ static int ufs_versal2_hce_enable_notify(struct ufs_hba *hba,
 			return ret;
 		}
 
-		ret = versal2_pm_ufs_sram_csr_sel(host->pd_dev_id, PM_UFS_SRAM_CSR_READ, &sram_csr);
+		ret = zynqmp_pm_sec_read_reg(PM_REGNODE_PMC_IOU_SLCR, SRAM_CSR_OFFSET, &sram_csr);
 		if (ret)
 			return ret;
 
@@ -366,8 +385,8 @@ static int ufs_versal2_hce_enable_notify(struct ufs_hba *hba,
 			return -EINVAL;
 		}
 
-		ret = versal2_pm_ufs_sram_csr_sel(host->pd_dev_id, PM_UFS_SRAM_CSR_WRITE,
-						  &sram_csr);
+		ret = zynqmp_pm_sec_mask_write_reg(PM_REGNODE_PMC_IOU_SLCR, SRAM_CSR_OFFSET,
+						   GENMASK(2, 1), sram_csr);
 		if (ret)
 			return ret;
 
@@ -425,12 +444,118 @@ static int ufs_versal2_link_startup_notify(struct ufs_hba *hba,
 	return ret;
 }
 
+static int ufs_versal2_phy_ratesel(struct ufs_hba *hba, u32 activelanes, u32 rx_req)
+{
+	u32 time_left, reg, lane;
+	int ret;
+
+	for (lane = 0; lane < activelanes; lane++) {
+		time_left = TIMEOUT_MICROSEC;
+		ret = ufs_versal2_phy_reg_read(hba, RX_OVRD_IN_1(lane), &reg);
+		if (ret)
+			return ret;
+
+		reg |= MPHY_RX_OVRD_EN;
+		if (rx_req)
+			reg |= MPHY_RX_OVRD_VAL;
+		else
+			reg &= ~MPHY_RX_OVRD_VAL;
+
+		ret = ufs_versal2_phy_reg_write(hba, RX_OVRD_IN_1(lane), reg);
+		if (ret)
+			return ret;
+
+		do {
+			ret = ufs_versal2_phy_reg_read(hba, RX_PCS_OUT(lane), &reg);
+			if (ret)
+				return ret;
+
+			reg &= MPHY_RX_ACK_MASK;
+			if (reg == rx_req)
+				break;
+
+			time_left--;
+			usleep_range(1, 5);
+		} while (time_left);
+
+		if (!time_left) {
+			dev_err(hba->dev, "Invalid Rx Ack value.\n");
+			return -ETIMEDOUT;
+		}
+	}
+
+	return 0;
+}
+
+static int ufs_versal2_pwr_change_notify(struct ufs_hba *hba, enum ufs_notify_change_status status,
+					 struct ufs_pa_layer_attr *dev_max_params,
+					 struct ufs_pa_layer_attr *dev_req_params)
+{
+	struct ufs_versal2_host *host = ufshcd_get_variant(hba);
+	u32 lane, reg, rate = 0;
+	int ret = 0;
+
+	if (status == PRE_CHANGE) {
+		memcpy(dev_req_params, dev_max_params, sizeof(struct ufs_pa_layer_attr));
+
+		/* If it is not a calibrated part, switch PWRMODE to SLOW_MODE */
+		if (!host->attcompval0 && !host->attcompval1 && !host->ctlecompval0 &&
+		    !host->ctlecompval1) {
+			dev_req_params->pwr_rx = SLOW_MODE;
+			dev_req_params->pwr_tx = SLOW_MODE;
+			return 0;
+		}
+
+		if (dev_req_params->pwr_rx == SLOW_MODE || dev_req_params->pwr_rx == SLOWAUTO_MODE)
+			return 0;
+
+		if (dev_req_params->hs_rate == PA_HS_MODE_B)
+			rate = 1;
+
+		 /* Select the rate */
+		ret = ufshcd_dme_set(hba, UIC_ARG_MIB(CBRATESEL), rate);
+		if (ret)
+			return ret;
+
+		ret = ufshcd_dme_set(hba, UIC_ARG_MIB(VS_MPHYCFGUPDT), 1);
+		if (ret)
+			return ret;
+
+		ret = ufs_versal2_phy_ratesel(hba, dev_req_params->lane_tx, 1);
+		if (ret)
+			return ret;
+
+		ret = ufs_versal2_phy_ratesel(hba, dev_req_params->lane_tx, 0);
+		if (ret)
+			return ret;
+
+		/* Remove rx_req override */
+		for (lane = 0; lane < dev_req_params->lane_tx; lane++) {
+			ret = ufs_versal2_phy_reg_read(hba, RX_OVRD_IN_1(lane), &reg);
+			if (ret)
+				return ret;
+
+			reg &= ~MPHY_RX_OVRD_EN;
+			ret = ufs_versal2_phy_reg_write(hba, RX_OVRD_IN_1(lane), reg);
+			if (ret)
+				return ret;
+		}
+
+		if (dev_req_params->lane_tx == UFS_LANE_2 && dev_req_params->lane_rx == UFS_LANE_2)
+			ret = ufshcd_dme_configure_adapt(hba, dev_req_params->gear_tx,
+							 PA_INITIAL_ADAPT);
+	}
+
+	return ret;
+}
+
 static struct ufs_hba_variant_ops ufs_versal2_hba_vops = {
 	.name			= "ufs-versal2-pltfm",
 	.init			= ufs_versal2_init,
 	.link_startup_notify	= ufs_versal2_link_startup_notify,
 	.hce_enable_notify	= ufs_versal2_hce_enable_notify,
 	.isr			= ufs_versal2_isr,
+	.pwr_change_notify	= ufs_versal2_pwr_change_notify,
 };
 
 static const struct of_device_id ufs_versal2_pltfm_match[] = {
@@ -455,14 +580,12 @@ static int ufs_versal2_probe(struct platform_device *pdev)
 	return ret;
 }
 
-static int ufs_versal2_remove(struct platform_device *pdev)
+static void ufs_versal2_remove(struct platform_device *pdev)
 {
 	struct ufs_hba *hba = platform_get_drvdata(pdev);
 
 	pm_runtime_get_sync(&(pdev)->dev);
 	ufshcd_remove(hba);
-
-	return 0;
 }
 
 static const struct dev_pm_ops ufs_versal2_pm_ops = {
