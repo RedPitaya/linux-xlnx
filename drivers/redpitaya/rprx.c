@@ -373,7 +373,7 @@ rmdev:
 /*
  * upon removing of device release dma channel and destroy character device file
  * */
-static int rprx_remove(struct platform_device *pdev)
+static void rprx_remove(struct platform_device *pdev)
 {
 	struct rprx_channel *rx = (struct rprx_channel *)platform_get_drvdata(pdev);
 	struct device * dev =(struct device *)&rx->rpdev->dev;
@@ -397,7 +397,6 @@ static int rprx_remove(struct platform_device *pdev)
 	if(dev&&rx){
 		devm_kfree(dev,rx);
 	}
-	return 0;
 }
 
 
