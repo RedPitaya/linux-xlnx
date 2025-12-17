@@ -238,6 +238,10 @@ CONFIG_RCU_CPU_STALL_TIMEOUT=60
 
 # Red Pitaya changes
 
+# Enable zstd compression for firmware
+CONFIG_FW_LOADER_COMPRESS=y
+CONFIG_FW_LOADER_COMPRESS_ZSTD=y
+
 # Ethernet PHY
 CONFIG_INTEL_XWAY_PHY=y
 # Wireless
