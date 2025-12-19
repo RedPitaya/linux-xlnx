@@ -67,6 +67,7 @@ struct rprx_channel{
     unsigned int minor_num;
     unsigned int major_num;
 	unsigned long read_timeout_s;
+	struct mutex mutex;
 };
 
 
@@ -195,7 +196,7 @@ static long rprx_ioctl(struct file *file, unsigned int cmd , unsigned long arg)
 		}else{
 			init_completion(&rx->cmp);
 			rx->d->callback = rprx_slave_callback;
-			rx->d->callback_param = &rx;
+			rx->d->callback_param = rx;
 			rx->cookie = rx->d->tx_submit(rx->d);
 			dev_info(dev, "submit \n");
 		}
@@ -345,6 +346,8 @@ static int rprx_probe(struct platform_device *pd)
 	rx->addrp = of_translate_address(rx->memory,of_get_address(rx->memory, 0, rx->memory_size, NULL));
 
 	rx->addrv = phys_to_virt(rx->addrp);
+
+	mutex_init(&rx->mutex);
 
 	if (rx->addrv==NULL){
 		dev_err(dev, "DMA reserved memory not allocated destroying device!\n");
