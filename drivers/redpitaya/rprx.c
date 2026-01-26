@@ -67,7 +67,6 @@ struct rprx_channel{
     unsigned int minor_num;
     unsigned int major_num;
 	unsigned long read_timeout_s;
-	struct mutex mutex;
 };
 
 
@@ -85,15 +84,20 @@ static ssize_t rprx_write(struct file *f, const char __user * buf,size_t len, lo
 static void rprx_slave_callback(void *completion)
 {
 	struct rprx_channel *rx;
-
 	rx = (struct rprx_channel *)completion;
 	dev_info((const struct device *)&rx->rpdev->dev, "complete\n");
-	//complete(completion);
+}
+
+static void rprx_slave_callback_result(void *completion, const struct dmaengine_result *result){
+	struct rprx_channel *rx;
+	rx = (struct rprx_channel *)completion;
+	dev_info((const struct device *)&rx->rpdev->dev, "complete with result %d\n",result->result);
 	rx->flag=1;
 	wake_up_interruptible(&rx->wq);
 }
 
-int rprx_open(struct inode * i, struct file * f)
+
+static int rprx_open(struct inode * i, struct file * f)
 {
 	struct rprx_channel *rx;
 	rx = container_of(i->i_cdev, struct rprx_channel ,c_dev );
@@ -102,11 +106,12 @@ int rprx_open(struct inode * i, struct file * f)
 	return 0;
 }
 
+
 /*
  * function blocks its user until rprx_slave_callback is called by dma engine
  * todo: this mechanism should at one point be replaced with some sort of pool or select
  */
-int rprx_read(struct file *filep, char *buff, size_t len, loff_t *off)
+static int rprx_read(struct file *filep, char *buff, size_t len, loff_t *off)
 {
 	struct rprx_channel *rx = (struct rprx_channel *)filep->private_data;
 	dev_info((const struct device *)&rx->rpdev->dev, "read wait flag:%d timeout: %lu\n",rx->flag, rx->read_timeout_s * HZ);
@@ -132,7 +137,6 @@ static long rprx_ioctl(struct file *file, unsigned int cmd , unsigned long arg)
 	struct rprx_channel *rx = (struct rprx_channel *)file->private_data;
 	const struct device * dev=(const struct device *)&rx->rpdev->dev;
 	smp_rmb();
-	dev_info(dev, "ioctl cmd:%d arg%d\n",cmd,(int)arg);
 	switch (cmd){
 
 	/*
@@ -167,6 +171,7 @@ static long rprx_ioctl(struct file *file, unsigned int cmd , unsigned long arg)
 		else{
 			init_completion(&rx->cmp);
 			rx->d->callback = rprx_slave_callback;
+			rx->d->callback_result = rprx_slave_callback_result;
 			rx->d->callback_param = rx;
 			rx->cookie = rx->d->tx_submit(rx->d);
 			dev_info(dev, "submit\n");
@@ -218,6 +223,10 @@ static long rprx_ioctl(struct file *file, unsigned int cmd , unsigned long arg)
 	case SET_RX_SGMNT_SIZE:{
 		rx->segment_size=arg;
 		dev_info(dev, "ioctl segment size set to 0x%X \n",rx->segment_size);
+	}break;
+
+	case SET_DELAY_INT:{
+		dev_info(dev, "ioctl set delay int = 1\n");
 	}break;
 	/*
 	 * kernel mesage for debugging
@@ -295,15 +304,23 @@ static int rprx_probe(struct platform_device *pd)
 		goto rmdev;
 	}
 
+	dev_info(dev, "DMA channel acquired: %s\n", dma_chan_name(rx->chan));
+
+	if (!rx->chan->device->device_prep_dma_cyclic) {
+		dev_err(dev, "DMA channel does not support cyclic transfers\n");
+		err = -ENODEV;
+		goto rmdev;
+	}
+
 	ret = of_property_read_u32(rx->rpdev->dev.of_node, "segment_size", &rx->segment_size);
 	if (ret) {
-		dev_err(&rx->rpdev->dev, "No segment_size value in device tree. Setting to %d\n",RX_SGMNT_SIZE);
+		dev_info(&rx->rpdev->dev, "No segment_size value in device tree. Setting to %d\n",RX_SGMNT_SIZE);
 		rx->segment_size=RX_SGMNT_SIZE;
 	}
 
 	ret = of_property_read_u32(rx->rpdev->dev.of_node, "segment_count", &rx->segment_cnt);
 	if (ret) {
-		dev_err(&rx->rpdev->dev, "No segment_count value in device tree. Setting to %d\n",RX_SGMNT_CNT);
+		dev_info(&rx->rpdev->dev, "No segment_count value in device tree. Setting to %d\n",RX_SGMNT_CNT);
 		rx->segment_cnt=RX_SGMNT_CNT;
 	}
 	/*
@@ -347,13 +364,11 @@ static int rprx_probe(struct platform_device *pd)
 
 	rx->addrv = phys_to_virt(rx->addrp);
 
-	mutex_init(&rx->mutex);
-
 	if (rx->addrv==NULL){
 		dev_err(dev, "DMA reserved memory not allocated destroying device!\n");
 		goto rmdev;
 	}else {
-		dev_info(dev, "reserved dma: %p and 0x%x KiB @0x%x\n",(void*)rx->chan,((rx->segment_cnt)*(rx->segment_size))/1024,rx->addrp);
+		dev_info(dev, "reserved dma: %p mem: 0x%lX\n",(void*)rx->chan,(unsigned long)rx->addrp);
 	}
 
 	/*

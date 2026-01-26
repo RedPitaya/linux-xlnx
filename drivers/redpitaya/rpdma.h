@@ -41,17 +41,10 @@ ioctl macro definitions
 #define SET_TX_SGMNT_SIZE 13
 #define SET_RX_SGMNT_CNT 16
 #define SET_RX_SGMNT_SIZE 15
+#define SET_DELAY_INT 17
 
-/*
- * SGMNT_CNT*SGMNT_SIZE should never be larger than second reg argument
- * in DT
- * 	rprx_reserverd: labuf@1c000000 {
- *		reg = <0x1c000000 0x2000000>;
- *	};
- * and SGMNT_SIZE should not be larger then 0x400000
- * */
-#define SGMNT_CNT 2
-#define SGMNT_SIZE 4*1024*1024
+#define SGMNT_CNT 1
+#define SGMNT_SIZE 2*1024*1024
 #define RX_SGMNT_CNT SGMNT_CNT
 #define RX_SGMNT_SIZE SGMNT_SIZE
 #define TX_SGMNT_CNT 0
