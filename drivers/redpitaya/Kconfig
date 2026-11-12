@@ -3,3 +3,14 @@ config RPRX
 	depends on XILINX_DMA
 	help
 	  Simple DMA receiver client driver. Y fo Red Pitaya
+
+config RP_RESMEM
+	tristate "Red Pitaya reserved memory access"
+	depends on OF_RESERVED_MEM && MMU
+	help
+	  Maps a reserved-memory region used by the FPGA DMA engines into
+	  user space as /dev/<label>, without /dev/mem. When the kernel has
+	  struct pages for the region (no "no-map"), the mapping can be
+	  pinned, so the data can be sent to a socket with MSG_ZEROCOPY.
+	  Bound by a "redpitaya,rp-resmem" device tree node with a
+	  memory-region phandle.

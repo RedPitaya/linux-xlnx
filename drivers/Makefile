@@ -198,4 +198,4 @@ obj-$(CONFIG_DPLL)		+= dpll/
 obj-$(CONFIG_S390)		+= s390/
 
 # Red Pitaya drivers
-obj-$(CONFIG_RPRX)		+= redpitaya/
+obj-y				+= redpitaya/
