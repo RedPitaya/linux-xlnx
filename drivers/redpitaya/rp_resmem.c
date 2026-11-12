@@ -13,8 +13,10 @@
  * cannot be pinned. For a "no-map" region the driver falls back to
  * remap_pfn_range(): the mapping works, zero copy does not.
  *
- * The mapping is uncached, as with /dev/mem and O_SYNC: the FPGA writes the
- * memory behind the CPU caches.
+ * The mapping is write-combined (normal memory, not cached), as /dev/mem maps
+ * RAM with O_SYNC: the FPGA writes the memory behind the CPU caches. Not
+ * pgprot_noncached(): on ARM that is strongly-ordered memory, where every
+ * unaligned access faults.
  *
  * The pages of a reserved region are never freed, so a page still held by the
  * network stack after munmap() or after the driver is unbound stays valid.
@@ -105,7 +107,7 @@ static int rp_resmem_mmap(struct file *file, struct vm_area_struct *vma)
 		return -EINVAL;
 
 	first_pfn = PHYS_PFN(rm->base) + vma->vm_pgoff;
-	vma->vm_page_prot = pgprot_noncached(vma->vm_page_prot);
+	vma->vm_page_prot = pgprot_writecombine(vma->vm_page_prot);
 
 	if (!rm->has_pages)
 		return remap_pfn_range(vma, vma->vm_start, first_pfn, len, vma->vm_page_prot);
